@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Arquitetura - Clínica WhatsApp com n8n + Google Calendar</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    color: #e2e8f0;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  .wrap { max-width: 1400px; margin: 0 auto; }
+  h1 {
+    font-size: 28px; margin-bottom: 8px;
+    background: linear-gradient(90deg, #22d3ee, #a78bfa);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .sub { color: #94a3b8; margin-bottom: 32px; font-size: 14px; }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 24px;
+    margin-bottom: 32px;
+  }
+  .layer {
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 20px;
+    position: relative;
+  }
+  .layer-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: #22d3ee;
+    margin-bottom: 16px;
+    font-weight: 700;
+  }
+  .layer.purple .layer-title { color: #a78bfa; }
+  .layer.green .layer-title { color: #4ade80; }
+  .layer.amber .layer-title { color: #fbbf24; }
+  .node {
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid #475569;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 10px;
+    transition: all 0.2s;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .node:hover {
+    border-color: #22d3ee;
+    transform: translateX(4px);
+  }
+  .node-icon { margin-right: 8px; }
+  .node-title { font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
+  .node-desc { font-size: 11px; color: #94a3b8; }
+  .flow {
+    background: rgba(30, 41, 59, 0.4);
+    border: 1px dashed #475569;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+  }
+  .flow h2 {
+    font-size: 16px; margin-bottom: 20px; color: #f1f5f9;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    align-items: center;
+  }
+  .step {
+    background: linear-gradient(135deg, #1e293b, #0f172a);
+    border: 1px solid #22d3ee;
+    border-radius: 10px;
+    padding: 14px;
+    text-align: center;
+    position: relative;
+    min-height: 80px;
+    display: flex; flex-direction: column;
+    justify-content: center; align-items: center;
+  }
+  .step-num {
+    position: absolute; top: -10px; left: -10px;
+    background: #22d3ee; color: #0f172a;
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    font-size: 12px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .arrow {
+    text-align: center; color: #22d3ee;
+    font-size: 24px;
+  }
+  .data-flow {
+    background: rgba(30, 41, 59, 0.4);
+    border: 1px dashed #475569;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+  }
+  .data-flow h2 { font-size: 16px; margin-bottom: 16px; color: #f1f5f9; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td {
+    text-align: left; padding: 10px;
+    border-bottom: 1px solid #334155;
+  }
+  th { color: #94a3b8; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td code {
+    background: rgba(15, 23, 42, 0.8);
+    padding: 2px 6px; border-radius: 4px;
+    font-size: 11px; color: #a78bfa;
+  }
+  .footer {
+    margin-top: 32px; padding: 16px;
+    background: rgba(30, 41, 59, 0.4);
+    border-radius: 8px;
+    font-size: 12px; color: #94a3b8;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🏥 Clínica WhatsApp — Arquitetura</h1>
+  <p class="sub">Atendimento automatizado via WhatsApp · n8n · Evolution API · Google Calendar · PostgreSQL</p>
+
+  <!-- Arquitetura em camadas -->
+  <div class="grid">
+    <!-- Camada 1: Cliente -->
+    <div class="layer">
+      <div class="layer-title">📱 Paciente</div>
+      <div class="node">
+        <div class="node-title">WhatsApp</div>
+        <div class="node-desc">Mensagens de texto, áudio (transcrito), imagens</div>
+      </div>
+      <div class="node">
+        <div class="node-title">Comandos</div>
+        <div class="node-desc">Agendar, cancelar, remarcar, info, falar com humano</div>
+      </div>
+    </div>
+
+    <!-- Camada 2: API WhatsApp -->
+    <div class="layer purple">
+      <div class="layer-title">🔌 Gateway WhatsApp</div>
+      <div class="node">
+        <div class="node-title">Evolution API</div>
+        <div class="node-desc">Webhook + envio de mensagens · self-hosted ou cloud</div>
+      </div>
+      <div class="node">
+        <div class="node-title">Sessão Clinic</div>
+        <div class="node-desc">QR Code único · multi-atendente opcional</div>
+      </div>
+    </div>
+
+    <!-- Camada 3: n8n (core) -->
+    <div class="layer green">
+      <div class="layer-title">⚙️ n8n — Orquestração</div>
+      <div class="node">
+        <div class="node-title">Webhook Receiver</div>
+        <div class="node-desc">Recebe eventos do WhatsApp</div>
+      </div>
+      <div class="node">
+        <div class="node-title">State Machine</div>
+        <div class="node-desc">Menu, agendamento, cancelamento, FAQ</div>
+      </div>
+      <div class="node">
+        <div class="node-title">NLP / IA</div>
+        <div class="node-desc">OpenAI ou Gemini p/ entender intenção</div>
+      </div>
+      <div class="node">
+        <div class="node-title">Google Calendar</div>
+        <div class="node-desc">Cria/atualiza/cancela eventos</div>
+      </div>
+      <div class="node">
+        <div class="node-title">Cron Lembretes</div>
+        <div class="node-desc">24h e 2h antes da consulta</div>
+      </div>
+    </div>
+
+    <!-- Camada 4: Dados -->
+    <div class="layer amber">
+      <div class="layer-title">💾 Dados & Integrações</div>
+      <div class="node">
+        <div class="node-title">PostgreSQL</div>
+        <div class="node-desc">Pacientes, consultas, histórico</div>
+      </div>
+      <div class="node">
+        <div class="node-title">Google Calendar</div>
+        <div class="node-desc">Agenda real dos médicos</div>
+      </div>
+      <div class="node">
+        <div class="node-title">Planilha / Sheets</div>
+        <div class="node-desc">Relatórios e backup opcional</div>
+      </div>
+      <div class="node">
+        <div class="node-title">E-mail / SMS</div>
+        <div class="node-desc">Notificação interna à equipe</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fluxo de agendamento -->
+  <div class="flow">
+    <h2>📅 Fluxo de Agendamento (happy path)</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <strong>Oi 👋</strong>
+        <small style="color:#94a3b8">Paciente manda "oi"</small>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <strong>Menu</strong>
+        <small style="color:#94a3b8">Bot mostra opções</small>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <strong>Especialidade</strong>
+        <small style="color:#94a3b8">Paciente escolhe</small>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <strong>Data/Hora</strong>
+        <small style="color:#94a3b8">Slots livres</small>
+      </div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <strong>✅ Pronto</strong>
+        <small style="color:#94a3b8">Evento criado</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tabela de intenções -->
+  <div class="data-flow">
+    <h2>🧠 Intenções reconhecidas</h2>
+    <table>
+      <thead>
+        <tr><th>Intenção</th><th>Gatilhos (exemplos)</th><th>Ação</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>SAUDACAO</code></td>
+          <td>oi, olá, bom dia, boa tarde</td>
+          <td>Mostra menu principal</td>
+        </tr>
+        <tr>
+          <td><code>AGENDAR</code></td>
+          <td>agendar, marcar, consulta, horário</td>
+          <td>Inicia fluxo de booking</td>
+        </tr>
+        <tr>
+          <td><code>CANCELAR</code></td>
+          <td>cancelar, desmarcar, não vou poder</td>
+          <td>Lista agendamentos e cancela</td>
+        </tr>
+        <tr>
+          <td><code>REAGENDAR</code></td>
+          <td>remarcar, mudar, trocar horário</td>
+          <td>Atualiza evento no Calendar</td>
+        </tr>
+        <tr>
+          <td><code>CONSULTAR</code></td>
+          <td>minha consulta, próxima, quando</td>
+          <td>Mostra próximo agendamento</td>
+        </tr>
+        <tr>
+          <td><code>INFO</code></td>
+          <td>endereço, convênio, preço, como funciona</td>
+          <td>Responde FAQ</td>
+        </tr>
+        <tr>
+          <td><code>HUMANO</code></td>
+          <td>atendente, humano, falar com alguém</td>
+          <td>Transfere para equipe</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="footer">
+    Stack: Evolution API + n8n (self-hosted) + Google Calendar + PostgreSQL + Redis (cache de estado)<br>
+    Custo estimado: R$ 0–150/mês (depende do porte) · tudo open-source
+  </div>
+</div>
+</body>
+</html>

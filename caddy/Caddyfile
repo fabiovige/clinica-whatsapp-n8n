@@ -1,0 +1,46 @@
+# ============================================================
+# Caddy · HTTPS automático via Let's Encrypt
+# Substitua SEU_DOMINIO pelo seu domínio real
+# ============================================================
+
+# ----- n8n (atendimento) -----
+atendimento.SEU_DOMINIO.com.br {
+    reverse_proxy n8n:5678 {
+        flush_interval -1
+    }
+
+    # Webhooks com timeout maior
+    @webhook path /webhook/* /webhook-test/*
+    reverse_proxy n8n:5678 {
+        flush_interval -1
+        transport http {
+            dial_timeout 60s
+            response_header_timeout 60s
+        }
+    }
+
+    encode gzip zstd
+
+    log {
+        output stdout
+        format console
+    }
+}
+
+# ----- Evolution Manager (opcional, remova se não usar) -----
+evo.SEU_DOMINIO.com.br {
+    reverse_proxy evolution:8080
+    encode gzip
+}
+
+# ----- Portainer (apenas se quiser UI Docker) -----
+portainer.SEU_DOMINIO.com.br {
+    reverse_proxy portainer:9000
+    encode gzip
+}
+
+# ----- Adminer (apenas em dev) -----
+db.SEU_DOMINIO.com.br {
+    reverse_proxy adminer:8080
+    encode gzip
+}

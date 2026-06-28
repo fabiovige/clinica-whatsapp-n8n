@@ -1,0 +1,335 @@
+{
+  "name": "01 - Clínica WhatsApp · Orquestrador",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clinica-webhook",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "wh1",
+      "name": "Webhook Evolution API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "clinica-evo"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{}]
+        }
+      },
+      "id": "set1",
+      "name": "Normalizar Payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 300],
+      "assignments": {
+        "assignments": [
+          {
+            "id": "a1",
+            "name": "event",
+            "value": "={{ $json.body.event }}",
+            "type": "string"
+          },
+          {
+            "id": "a2",
+            "name": "instance",
+            "value": "={{ $json.body.instance }}",
+            "type": "string"
+          },
+          {
+            "id": "a3",
+            "name": "remoteJid",
+            "value": "={{ $json.body.data.key.remoteJid }}",
+            "type": "string"
+          },
+          {
+            "id": "a4",
+            "name": "fromMe",
+            "value": "={{ $json.body.data.key.fromMe }}",
+            "type": "boolean"
+          },
+          {
+            "id": "a5",
+            "name": "messageId",
+            "value": "={{ $json.body.data.key.id }}",
+            "type": "string"
+          },
+          {
+            "id": "a6",
+            "name": "pushName",
+            "value": "={{ $json.body.data.pushName }}",
+            "type": "string"
+          },
+          {
+            "id": "a7",
+            "name": "messageType",
+            "value": "={{ $json.body.data.messageType }}",
+            "type": "string"
+          },
+          {
+            "id": "a8",
+            "name": "text",
+            "value": "={{ $json.body.data.message.conversation || $json.body.data.message.extendedTextMessage.text || '' }}",
+            "type": "string"
+          },
+          {
+            "id": "a9",
+            "name": "phone",
+            "value": "={{ $json.body.data.key.remoteJid.replace('@s.whatsapp.net','').replace('+','') }}",
+            "type": "string"
+          },
+          {
+            "id": "a10",
+            "name": "isGroup",
+            "value": "={{ $json.body.data.key.remoteJid.includes('@g.us') }}",
+            "type": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.event }}",
+              "rightValue": "messages.upsert",
+              "operator": {"type": "string", "operation": "equals"}
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "sw1",
+      "name": "Filtra evento de mensagem",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "typeValidation": "strict"},
+          "conditions": [
+            {
+              "id": "g1",
+              "leftValue": "={{ $json.isGroup }}",
+              "rightValue": false,
+              "operator": {"type": "boolean", "operation": "equals", "singleValue": true}
+            },
+            {
+              "id": "g2",
+              "leftValue": "={{ $json.fromMe }}",
+              "rightValue": false,
+              "operator": {"type": "boolean", "operation": "equals", "singleValue": true}
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "sw2",
+      "name": "Ignora grupo e mensagens próprias",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Detecta intenção a partir do texto simples (sem IA)\nconst text = ($input.first().json.text || '').toLowerCase().trim();\n\nlet intent = 'DESCONHECIDA';\nlet confidence = 0.0;\n\nconst patterns = {\n  SAUDACAO: [/^(oi|ol[aá]|bom dia|boa tarde|boa noite|hey|eae|salve)/i],\n  AGENDAR: [/agendar|marcar|consulta|horário|agenda|quero.*consulta|preciso.*consulta/i],\n  CANCELAR: [/cancelar|desmarcar|n[aã]o vou|n[aã]o posso|anular/i],\n  REAGENDAR: [/remarcar|mudar|trocar|reagendar|outro dia|outro hor[aá]rio/i],\n  CONSULTAR: [/minha consulta|próxima|quando é|quando vou|meus agendamentos/i],\n  INFO: [/endere[çc]o|conv[eê]nio|pre[çc]o|valor|como funciona|funcionamento|hor[aá]rio de atendimento/i],\n  HUMANO: [/atendente|humano|pessoa|algu[eé]m|recep[çc][aã]o|ligar/i],\n  CONFIRMAR: [/^(sim|s|yes|confirmo|confirmar|ok|pode ser|isso|exato)$/i],\n  NEGAR: [/^(n[aã]o|nao|n|no|cancelar|nunca|para)$/i]\n};\n\nfor (const [key, regs] of Object.entries(patterns)) {\n  for (const r of regs) {\n    if (r.test(text)) { intent = key; confidence = 0.8; break; }\n  }\n  if (intent !== 'DESCONHECIDA') break;\n}\n\n// menu numérico\nif (/^[1-6]$/.test(text)) {\n  intent = { '1': 'AGENDAR', '2': 'CONSULTAR', '3': 'CANCELAR', '4': 'REAGENDAR', '5': 'INFO', '6': 'HUMANO' }[text];\n  confidence = 0.95;\n}\n\nreturn { json: { ...$input.first().json, intent, confidence, normalizedText: text } };\n"
+      },
+      "id": "fn1",
+      "name": "Detecta Intenção",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO patients (phone, name, created_at, updated_at) VALUES ({{ JSON.stringify($json.phone) }}, {{ JSON.stringify($json.pushName) }}, NOW(), NOW()) ON CONFLICT (phone) DO UPDATE SET name = COALESCE(EXCLUDED.name, patients.name), updated_at = NOW() RETURNING *;",
+        "options": {}
+      },
+      "id": "db1",
+      "name": "Upsert Paciente",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1340, 200],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM conversation_state WHERE phone = {{ JSON.stringify($json.phone) }};",
+        "options": {}
+      },
+      "id": "db2",
+      "name": "Busca Estado da Conversa",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1560, 200],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "typeValidation": "strict"},
+          "conditions": [
+            {"id": "r1", "leftValue": "={{ $json.intent }}", "rightValue": "AGENDAR", "operator": {"type": "string", "operation": "equals"}}
+          ]
+        }
+      },
+      "id": "sw3",
+      "name": "Roteia: AGENDAR",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1800, 80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "typeValidation": "strict"},
+          "conditions": [
+            {"id": "r2", "leftValue": "={{ $json.intent }}", "rightValue": "CANCELAR", "operator": {"type": "string", "operation": "equals"}}
+          ]
+        }
+      },
+      "id": "sw4",
+      "name": "Roteia: CANCELAR",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1800, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "typeValidation": "strict"},
+          "conditions": [
+            {"id": "r3", "leftValue": "={{ $json.intent }}", "rightValue": "REAGENDAR", "operator": {"type": "string", "operation": "equals"}}
+          ]
+        }
+      },
+      "id": "sw5",
+      "name": "Roteia: REAGENDAR",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1800, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "typeValidation": "strict"},
+          "conditions": [
+            {"id": "r4", "leftValue": "={{ $json.intent }}", "rightValue": "CONSULTAR", "operator": {"type": "string", "operation": "equals"}}
+          ]
+        }
+      },
+      "id": "sw6",
+      "name": "Roteia: CONSULTAR",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1800, 440]
+    },
+    {
+      "parameters": {
+        "url": "=https://{{ $env.EVO_HOST }}/message/sendText/{{ $env.EVO_INSTANCE }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Content-Type", "value": "application/json"},
+            {"name": "apikey", "value": "={{ $env.EVO_APIKEY }}"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $json.phone }}\",\n  \"text\": \"{{ $json.reply }}\",\n  \"delay\": 1200\n}",
+        "options": {}
+      },
+      "id": "send1",
+      "name": "Responde no WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2500, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Gera a resposta padrão para cada intenção\nconst data = $input.first().json;\nconst intent = data.intent;\n\nlet reply = '';\n\nswitch (intent) {\n  case 'SAUDACAO':\n  case 'DESCONHECIDA':\n    reply = `Olá, ${data.pushName || 'tudo bem'}? 👋\\n\\nSou a assistente virtual da *Clínica Vida*. Como posso te ajudar hoje?\\n\\n*1️⃣* Agendar consulta\\n*2️⃣* Ver meus agendamentos\\n*3️⃣* Cancelar consulta\\n*4️⃣* Remarcar consulta\\n*5️⃣* Informações (endereço, convênios)\\n*6️⃣* Falar com atendente\\n\\n_Digite o número da opção_`;\n    break;\n  case 'INFO':\n    reply = `📍 *Clínica Vida*\\n\\n*Endereço:* Rua das Flores, 123 — Centro\\n*Horário:* Seg-Sex 7h-19h · Sáb 7h-12h\\n*Convênios:* Unimed, Amil, SulAmérica, Bradesco Saúde\\n*Particular:* a partir de R$ 250\\n\\nQuer *agendar* agora? É só digitar *1*.`;\n    break;\n  case 'HUMANO':\n    reply = `Vou te transferir para um atendente humano 👩‍💼\\n\\nPor favor, descreva brevemente o assunto enquanto aguardo. Em horário comercial o retorno é em até 5 minutos.`;\n    // Aqui dispara notificação para a equipe\n    break;\n  case 'AGENDAR':\n    reply = `Ótimo! Vamos agendar 😊\\n\\nQual especialidade você precisa?\\n\\n*1️⃣* Clínico Geral\\n*2️⃣* Cardiologia\\n*3️⃣* Dermatologia\\n*4️⃣* Ginecologia\\n*5️⃣* Pediatria\\n*6️⃣* Ortopedia\\n\\nResponde com o número da especialidade.`;\n    break;\n  case 'CANCELAR':\n    reply = `Sem problema. Vou listar seus agendamentos ativos...`;\n    break;\n  case 'REAGENDAR':\n    reply = `Vamos remarcar! Primeiro deixa eu ver sua próxima consulta...`;\n    break;\n  case 'CONSULTAR':\n    reply = `Vou checar sua agenda...`;\n    break;\n  default:\n    reply = `Desculpa, não entendi 🤔\\n\\nDigite *menu* para ver as opções ou escolha um número de 1 a 6.`;\n}\n\nreturn { json: { ...data, reply } };\n"
+      },
+      "id": "fn2",
+      "name": "Gera Resposta",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2260, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO conversation_log (phone, intent, confidence, message_text, created_at) VALUES ({{ JSON.stringify($json.phone) }}, {{ JSON.stringify($json.intent) }}, {{ $json.confidence }}, {{ JSON.stringify($json.text) }}, NOW());",
+        "options": {}
+      },
+      "id": "dblog",
+      "name": "Log da Conversa",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2740, 300],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "url": "=https://{{ $env.EVO_HOST }}/message/sendText/{{ $env.EVO_INSTANCE }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"5511999998888\",\n  \"text\": \"🔔 *Atendimento humano solicitado*\\n\\nPaciente: {{ $json.pushName }}\\nTelefone: {{ $json.phone }}\\nÚltima msg: {{ $json.text }}\"\n}",
+        "options": {}
+      },
+      "id": "notify1",
+      "name": "Notifica Equipe (HUMANO)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2260, 200]
+    }
+  ],
+  "connections": {
+    "Webhook Evolution API": {"main": [[{"node": "Normalizar Payload", "type": "main", "index": 0}]]},
+    "Normalizar Payload": {"main": [[{"node": "Filtra evento de mensagem", "type": "main", "index": 0}]]},
+    "Filtra evento de mensagem": {"main": [[{"node": "Ignora grupo e mensagens próprias", "type": "main", "index": 0}]]},
+    "Ignora grupo e mensagens próprias": {"main": [[{"node": "Detecta Intenção", "type": "main", "index": 0}]]},
+    "Detecta Intenção": {"main": [[{"node": "Upsert Paciente", "type": "main", "index": 0}]]},
+    "Upsert Paciente": {"main": [[{"node": "Busca Estado da Conversa", "type": "main", "index": 0}]]},
+    "Busca Estado da Conversa": {"main": [[{"node": "Roteia: AGENDAR", "type": "main", "index": 0}]]},
+    "Roteia: AGENDAR": {"main": [[{"node": "Gera Resposta", "type": "main", "index": 0}]]},
+    "Roteia: CANCELAR": {"main": [[{"node": "Gera Resposta", "type": "main", "index": 0}]]},
+    "Roteia: REAGENDAR": {"main": [[{"node": "Gera Resposta", "type": "main", "index": 0}]]},
+    "Roteia: CONSULTAR": {"main": [[{"node": "Gera Resposta", "type": "main", "index": 0}]]},
+    "Gera Resposta": {"main": [[{"node": "Responde no WhatsApp", "type": "main", "index": 0}]]},
+    "Responde no WhatsApp": {"main": [[{"node": "Log da Conversa", "type": "main", "index": 0}]]}
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "timezone": "America/Sao_Paulo"
+  },
+  "tags": [
+    {"name": "clinica"},
+    {"name": "whatsapp"},
+    {"name": "producao"}
+  ],
+  "versionId": "1.0.0",
+  "id": "wf-clinica-orchestrator"
+}

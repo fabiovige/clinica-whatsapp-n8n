@@ -1,0 +1,375 @@
+{
+  "name": "03 - Clínica WhatsApp · Cancelar & Remarcar",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clinica-cancel",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh_c1",
+      "name": "Webhook Cancelar",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 200],
+      "webhookId": "clinica-cancel"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clinica-reschedule",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh_r1",
+      "name": "Webhook Remarcar",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 600],
+      "webhookId": "clinica-reschedule"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, patient_name, specialty, start_time, calendar_event_id, status FROM appointments WHERE phone = {{ JSON.stringify($json.body.phone) }} AND status IN ('confirmed','pending') AND start_time > NOW() ORDER BY start_time ASC LIMIT 5;",
+        "options": {}
+      },
+      "id": "db_c1",
+      "name": "Lista agendamentos ativos",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [460, 200],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "typeValidation": "strict"},
+          "conditions": [
+            {"id": "c1", "leftValue": "={{ $json.body.action }}", "rightValue": "list", "operator": {"type": "string", "operation": "equals"}}
+          ]
+        }
+      },
+      "id": "if_c1",
+      "name": "Ação = listar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "const appts = $input.all().map(i => i.json);\nif (appts.length === 0) {\n  return { json: { reply: '📭 Você não tem consultas agendadas no momento.\\n\\nQuer *agendar* uma? Digite *1*.', success: true, count: 0 } };\n}\n\nlet list = '📅 *Suas próximas consultas:*\\n\\n';\nappts.forEach((a, i) => {\n  const d = new Date(a.start_time);\n  const fmtDate = d.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' });\n  const fmtTime = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });\n  list += `*${i + 1}* — ${fmtDate} às ${fmtTime}\\n    ${a.specialty} (ID: ${a.id})\\n\\n`;\n});\n\nlist += '_Para cancelar, responda:_\\n*canc X* (onde X é o número)\\n\\n_Para remarcar:_\\n*remarca X novo-horário*';\n\nreturn { json: { reply: list, success: true, count: appts.length, appointments: appts } };\n"
+      },
+      "id": "fn_c1",
+      "name": "Formata lista",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 100]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "resp_c1",
+      "name": "Responde lista",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1120, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM appointments WHERE id = {{ $json.body.appointmentId }} AND phone = {{ JSON.stringify($json.body.phone) }} AND status = 'confirmed';",
+        "options": {}
+      },
+      "id": "db_c2",
+      "name": "Busca agendamento específico",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [900, 300],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "operation": "delete",
+        "calendar": {"__rl": true, "value": "primary", "mode": "id"},
+        "eventId": "={{ $json.calendar_event_id }}",
+        "options": {"sendUpdates": "all"}
+      },
+      "id": "gc_c1",
+      "name": "Google Calendar · Deletar evento",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [1120, 300],
+      "credentials": {"googleCalendarOAuth2Api": {"id": "clinica-google", "name": "Clínica Google"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE appointments SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW() WHERE id = {{ $json.body.appointmentId }} RETURNING *;",
+        "options": {}
+      },
+      "id": "db_c3",
+      "name": "Marca como cancelado",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1340, 300],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "functionCode": "const a = $input.first().json;\nconst d = new Date(a.start_time);\nconst fmtDate = d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' });\nconst fmtTime = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });\n\nconst reply = `✅ *Consulta cancelada*\\n\\n${a.specialty}\\n${fmtDate} às ${fmtTime}\\n\\nO horário foi liberado. Quando quiser, é só digitar *1* para agendar de novo. 😊`;\n\nreturn { json: { phone: a.phone, reply, success: true } };\n"
+      },
+      "id": "fn_c2",
+      "name": "Monta confirmação de cancelamento",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://{{ $env.EVO_HOST }}/message/sendText/{{ $env.EVO_INSTANCE }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Content-Type", "value": "application/json"},
+            {"name": "apikey", "value": "={{ $env.EVO_APIKEY }}"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $json.phone }}\",\n  \"text\": \"{{ $json.reply }}\"\n}",
+        "options": {}
+      },
+      "id": "send_c1",
+      "name": "Confirma cancelamento ao paciente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, action: 'cancelled' }) }}",
+        "options": {}
+      },
+      "id": "resp_c2",
+      "name": "Responde (cancelado)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = $json.body;\n\nconst SPECIALTIES = {\n  'clinico-geral': { duration: 30, calendarId: 'clinico-geral@clinica.com.br' },\n  'cardio':        { duration: 40, calendarId: 'cardio@clinica.com.br' },\n  'derma':         { duration: 30, calendarId: 'derma@clinica.com.br' },\n  'gineco':        { duration: 40, calendarId: 'gineco@clinica.com.br' },\n  'pediatra':      { duration: 30, calendarId: 'pediatra@clinica.com.br' },\n  'orto':          { duration: 40, calendarId: 'orto@clinica.com.br' }\n};\n\nconst [y, m, d] = data.newDate.split('-');\nconst [h, min] = data.newTime.split(':');\nconst start = new Date(Date.UTC(+y, +m - 1, +d, +h, +min));\nconst end = new Date(start.getTime() + 30 * 60 * 1000);\n\nreturn {\n  json: {\n    ...data,\n    newStartISO: start.toISOString(),\n    newEndISO: end.toISOString()\n  }\n};\n"
+      },
+      "id": "fn_r1",
+      "name": "Calcula novas datas",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [460, 600]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM appointments WHERE id = {{ $json.body.appointmentId }} AND phone = {{ JSON.stringify($json.body.phone) }} AND status = 'confirmed';",
+        "options": {}
+      },
+      "id": "db_r1",
+      "name": "Busca agendamento atual",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [680, 600],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "operation": "availability",
+        "calendar": {"__rl": true, "value": "primary", "mode": "id"},
+        "timeMin": "={{ $json.newStartISO }}",
+        "timeMax": "={{ $json.newEndISO }}",
+        "options": {"timezone": "America/Sao_Paulo"}
+      },
+      "id": "gc_r1",
+      "name": "Verifica disponibilidade",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [900, 600],
+      "credentials": {"googleCalendarOAuth2Api": {"id": "clinica-google", "name": "Clínica Google"}}
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "typeValidation": "strict"},
+          "combinator": "and",
+          "conditions": [
+            {"id": "fr1", "leftValue": "={{ $json.busy }}", "rightValue": [], "operator": {"type": "array", "operation": "empty", "singleValue": true}}
+          ]
+        }
+      },
+      "id": "if_r1",
+      "name": "Novo horário livre?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 600]
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "operation": "update",
+        "calendar": {"__rl": true, "value": "primary", "mode": "id"},
+        "eventId": "={{ $json.body.calendarEventId }}",
+        "updateFields": {
+          "start": "={{ $json.newStartISO }}",
+          "end": "={{ $json.newEndISO }}",
+          "description": "={{ 'Reagendado em ' + new Date().toISOString() }}"
+        },
+        "options": {"sendUpdates": "all"}
+      },
+      "id": "gc_r2",
+      "name": "Google Calendar · Atualizar evento",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [1340, 500],
+      "credentials": {"googleCalendarOAuth2Api": {"id": "clinica-google", "name": "Clínica Google"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE appointments SET start_time = {{ JSON.stringify($json.newStartISO) }}, end_time = {{ JSON.stringify($json.newEndISO) }}, updated_at = NOW(), rescheduled_at = NOW() WHERE id = {{ $json.body.appointmentId }} RETURNING *;",
+        "options": {}
+      },
+      "id": "db_r2",
+      "name": "Atualiza agendamento no DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1560, 500],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "functionCode": "const a = $input.first().json;\nconst d = new Date(a.start_time);\nconst fmtDate = d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' });\nconst fmtTime = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });\n\nconst reply = `🔄 *Consulta remarcada!*\\n\\n${a.specialty}\\n📅 ${fmtDate}\\n⏰ ${fmtTime}\\n\\nOs lembretes serão atualizados automaticamente.`;\n\nreturn { json: { phone: a.phone, reply, success: true } };\n"
+      },
+      "id": "fn_r2",
+      "name": "Monta confirmação remarcação",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1780, 500]
+    },
+    {
+      "parameters": {
+        "url": "=https://{{ $env.EVO_HOST }}/message/sendText/{{ $env.EVO_INSTANCE }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Content-Type", "value": "application/json"},
+            {"name": "apikey", "value": "={{ $env.EVO_APIKEY }}"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $json.phone }}\",\n  \"text\": \"{{ $json.reply }}\"\n}",
+        "options": {}
+      },
+      "id": "send_r1",
+      "name": "Envia confirmação remarcação",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 500]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, action: 'rescheduled' }) }}",
+        "options": {}
+      },
+      "id": "resp_r1",
+      "name": "Responde (remarcado)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2220, 500]
+    },
+    {
+      "parameters": {
+        "url": "=https://{{ $env.EVO_HOST }}/message/sendText/{{ $env.EVO_INSTANCE }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Content-Type", "value": "application/json"},
+            {"name": "apikey", "value": "={{ $env.EVO_APIKEY }}"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $json.phone }}\",\n  \"text\": \"😕 Esse horário não está livre. Escolha outro e me avisa.\"\n}",
+        "options": {}
+      },
+      "id": "send_r2",
+      "name": "Avisa: novo horário ocupado",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 700]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, reason: 'slot_unavailable' }) }}",
+        "options": {}
+      },
+      "id": "resp_r2",
+      "name": "Responde (horário ocupado)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1560, 700]
+    }
+  ],
+  "connections": {
+    "Webhook Cancelar": {"main": [[{"node": "Lista agendamentos ativos", "type": "main", "index": 0}]]},
+    "Lista agendamentos ativos": {"main": [[{"node": "Ação = listar?", "type": "main", "index": 0}]]},
+    "Ação = listar?": {
+      "main": [
+        [{"node": "Formata lista", "type": "main", "index": 0}],
+        [{"node": "Busca agendamento específico", "type": "main", "index": 0}]
+      ]
+    },
+    "Formata lista": {"main": [[{"node": "Responde lista", "type": "main", "index": 0}]]},
+    "Busca agendamento específico": {"main": [[{"node": "Google Calendar · Deletar evento", "type": "main", "index": 0}]]},
+    "Google Calendar · Deletar evento": {"main": [[{"node": "Marca como cancelado", "type": "main", "index": 0}]]},
+    "Marca como cancelado": {"main": [[{"node": "Monta confirmação de cancelamento", "type": "main", "index": 0}]]},
+    "Monta confirmação de cancelamento": {"main": [[{"node": "Confirma cancelamento ao paciente", "type": "main", "index": 0}]]},
+    "Confirma cancelamento ao paciente": {"main": [[{"node": "Responde (cancelado)", "type": "main", "index": 0}]]},
+    "Webhook Remarcar": {"main": [[{"node": "Calcula novas datas", "type": "main", "index": 0}]]},
+    "Calcula novas datas": {"main": [[{"node": "Busca agendamento atual", "type": "main", "index": 0}]]},
+    "Busca agendamento atual": {"main": [[{"node": "Verifica disponibilidade", "type": "main", "index": 0}]]},
+    "Verifica disponibilidade": {"main": [[{"node": "Novo horário livre?", "type": "main", "index": 0}]]},
+    "Novo horário livre?": {
+      "main": [
+        [{"node": "Google Calendar · Atualizar evento", "type": "main", "index": 0}],
+        [{"node": "Avisa: novo horário ocupado", "type": "main", "index": 0}]
+      ]
+    },
+    "Google Calendar · Atualizar evento": {"main": [[{"node": "Atualiza agendamento no DB", "type": "main", "index": 0}]]},
+    "Atualiza agendamento no DB": {"main": [[{"node": "Monta confirmação remarcação", "type": "main", "index": 0}]]},
+    "Monta confirmação remarcação": {"main": [[{"node": "Envia confirmação remarcação", "type": "main", "index": 0}]]},
+    "Envia confirmação remarcação": {"main": [[{"node": "Responde (remarcado)", "type": "main", "index": 0}]]},
+    "Avisa: novo horário ocupado": {"main": [[{"node": "Responde (horário ocupado)", "type": "main", "index": 0}]]}
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/Sao_Paulo"
+  },
+  "tags": [
+    {"name": "clinica"},
+    {"name": "cancelamento"},
+    {"name": "remarcacao"}
+  ],
+  "versionId": "1.0.0",
+  "id": "wf-clinica-cancel-reschedule"
+}

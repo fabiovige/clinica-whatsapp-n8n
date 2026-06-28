@@ -1,0 +1,210 @@
+{
+  "name": "02-META - Clínica WhatsApp · Booking (Meta Cloud API)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clinica-meta-booking",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh_book",
+      "name": "Webhook Booking",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "clinica-meta-booking"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{}]
+        }
+      },
+      "id": "set_book",
+      "name": "Extrair dados",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 300],
+      "assignments": {
+        "assignments": [
+          {"id": "b1", "name": "phone", "value": "={{ $json.body.phone }}", "type": "string"},
+          {"id": "b2", "name": "patientName", "value": "={{ $json.body.patientName }}", "type": "string"},
+          {"id": "b3", "name": "specialty", "value": "={{ $json.body.specialty }}", "type": "string"},
+          {"id": "b4", "name": "doctor", "value": "={{ $json.body.doctor }}", "type": "string"},
+          {"id": "b5", "name": "date", "value": "={{ $json.body.date }}", "type": "string"},
+          {"id": "b6", "name": "time", "value": "={{ $json.body.time }}", "type": "string"},
+          {"id": "b7", "name": "phoneNumberId", "value": "={{ $json.body.phoneNumberId || $env.META_PHONE_ID }}", "type": "string"}
+        ]
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = $input.first().json;\n\nconst SPECIALTIES = {\n  '1': { name: 'Clínico Geral', duration: 30, calendarId: 'clinico-geral@clinica.com.br' },\n  '2': { name: 'Cardiologia',  duration: 40, calendarId: 'cardio@clinica.com.br' },\n  '3': { name: 'Dermatologia', duration: 30, calendarId: 'derma@clinica.com.br' },\n  '4': { name: 'Ginecologia',  duration: 40, calendarId: 'gineco@clinica.com.br' },\n  '5': { name: 'Pediatria',    duration: 30, calendarId: 'pediatra@clinica.com.br' },\n  '6': { name: 'Ortopedia',    duration: 40, calendarId: 'orto@clinica.com.br' }\n};\n\nconst spec = SPECIALTIES[data.specialty];\nif (!spec) return { json: { ...data, error: 'Especialidade inválida' } };\n\nconst [y, m, d] = data.date.split('-');\nconst [h, min] = data.time.split(':');\nconst start = new Date(Date.UTC(+y, +m - 1, +d, +h, +min));\nconst end = new Date(start.getTime() + spec.duration * 60 * 1000);\n\nreturn {\n  json: {\n    ...data,\n    specialtyName: spec.name,\n    calendarId: spec.calendarId,\n    durationMin: spec.duration,\n    startISO: start.toISOString(),\n    endISO: end.toISOString()\n  }\n};\n"
+      },
+      "id": "fn_resolve",
+      "name": "Resolve especialidade + datas",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "operation": "availability",
+        "calendar": {"__rl": true, "value": "={{ $json.calendarId }}", "mode": "id"},
+        "timeMin": "={{ $json.startISO }}",
+        "timeMax": "={{ $json.endISO }}",
+        "options": {"timezone": "America/Sao_Paulo"}
+      },
+      "id": "gc_check",
+      "name": "Verifica horário livre",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [900, 200],
+      "credentials": {"googleCalendarOAuth2Api": {"id": "clinica-google", "name": "Clínica Google"}}
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "typeValidation": "strict"},
+          "combinator": "and",
+          "conditions": [
+            {"id": "f1", "leftValue": "={{ $json.busy }}", "rightValue": [], "operator": {"type": "array", "operation": "empty", "singleValue": true}}
+          ]
+        }
+      },
+      "id": "if_free",
+      "name": "Livre?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "operation": "create",
+        "calendar": {"__rl": true, "value": "={{ $json.calendarId }}", "mode": "id"},
+        "start": "={{ $json.startISO }}",
+        "end": "={{ $json.endISO }}",
+        "summary": "={{ $json.specialtyName + ' - ' + $json.patientName }}",
+        "description": "Paciente: {{ $json.patientName }} · Telefone: {{ $json.phone }}",
+        "options": {"timezone": "America/Sao_Paulo"}
+      },
+      "id": "gc_create",
+      "name": "Cria evento Calendar",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [1340, 100],
+      "credentials": {"googleCalendarOAuth2Api": {"id": "clinica-google", "name": "Clínica Google"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO appointments (phone, patient_name, specialty, doctor, start_time, end_time, calendar_event_id, calendar_id, status, created_at, updated_at) VALUES ({{ JSON.stringify($json.phone) }}, {{ JSON.stringify($json.patientName) }}, {{ JSON.stringify($json.specialtyName) }}, {{ JSON.stringify($json.doctor || 'A definir') }}, {{ JSON.stringify($json.startISO) }}, {{ JSON.stringify($json.endISO) }}, {{ JSON.stringify($json.id) }}, {{ JSON.stringify($json.calendarId) }}, 'confirmed', NOW(), NOW()) RETURNING *;",
+        "options": {}
+      },
+      "id": "db_save",
+      "name": "Salva no DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1560, 100],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $json.phoneNumberId }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer {{ $env.META_TOKEN }}"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"recipient_type\": \"individual\",\n  \"to\": \"{{ $json.phone }}\",\n  \"type\": \"template\",\n  \"template\": {\n    \"name\": \"consulta_confirmada\",\n    \"language\": {\"code\": \"pt_BR\"},\n    \"components\": [\n      {\n        \"type\": \"body\",\n        \"parameters\": [\n          {\"type\": \"text\", \"text\": {{ JSON.stringify($json.patientName.split(' ')[0]) }}},\n          {\"type\": \"text\", \"text\": {{ JSON.stringify($json.specialtyName) }}},\n          {\"type\": \"text\", \"text\": {{ JSON.stringify(new Date($json.start_time).toLocaleDateString('pt-BR', {weekday: 'long', day: '2-digit', month: 'long'})) }}},\n          {\"type\": \"text\", \"text\": {{ JSON.stringify(new Date($json.start_time).toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'})) }}}\n        ]\n      }\n    ]\n  }\n}",
+        "options": {"timeout": 15000}
+      },
+      "id": "send_meta_template",
+      "name": "Envia template confirmação (Meta)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 100],
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, appointmentId: $json.id }) }}",
+        "options": {}
+      },
+      "id": "resp_ok",
+      "name": "Responde (OK)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2000, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $json.phoneNumberId }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer {{ $env.META_TOKEN }}"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"recipient_type\": \"individual\",\n  \"to\": \"{{ $json.phone }}\",\n  \"type\": \"text\",\n  \"text\": {\"body\": \"😕 Esse horário já está ocupado. Escolha outro horário disponível e me avisa!\"}\n}",
+        "options": {"timeout": 15000}
+      },
+      "id": "send_busy",
+      "name": "Avisa: horário ocupado",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, reason: 'slot_unavailable' }) }}",
+        "options": {}
+      },
+      "id": "resp_busy",
+      "name": "Responde (ocupado)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1560, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Booking": {"main": [[{"node": "Extrair dados", "type": "main", "index": 0}]]},
+    "Extrair dados": {"main": [[{"node": "Resolve especialidade + datas", "type": "main", "index": 0}]]},
+    "Resolve especialidade + datas": {"main": [[{"node": "Verifica horário livre", "type": "main", "index": 0}]]},
+    "Verifica horário livre": {"main": [[{"node": "Livre?", "type": "main", "index": 0}]]},
+    "Livre?": {
+      "main": [
+        [{"node": "Cria evento Calendar", "type": "main", "index": 0}],
+        [{"node": "Avisa: horário ocupado", "type": "main", "index": 0}]
+      ]
+    },
+    "Cria evento Calendar": {"main": [[{"node": "Salva no DB", "type": "main", "index": 0}]]},
+    "Salva no DB": {"main": [[{"node": "Envia template confirmação (Meta)", "type": "main", "index": 0}]]},
+    "Envia template confirmação (Meta)": {"main": [[{"node": "Responde (OK)", "type": "main", "index": 0}]]},
+    "Avisa: horário ocupado": {"main": [[{"node": "Responde (ocupado)", "type": "main", "index": 0}]]}
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/Sao_Paulo"
+  },
+  "tags": [{"name": "clinica"}, {"name": "meta-api"}, {"name": "booking"}],
+  "versionId": "1.0.0",
+  "id": "wf-meta-booking"
+}

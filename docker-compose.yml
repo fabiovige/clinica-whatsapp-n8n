@@ -1,0 +1,234 @@
+# ============================================================
+# Clínica WhatsApp · Docker Compose
+# Suporta: Evolution API OU Meta WhatsApp Cloud API
+# ============================================================
+# Uso:
+#   cp .env.example .env  &&  nano .env
+#   docker compose up -d
+#   docker compose logs -f n8n
+# ============================================================
+
+services:
+
+  # ----------------------------------------------------------
+  # PostgreSQL · banco principal (clínica + n8n + Evolution)
+  # ----------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: clinica-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clinica123}
+      POSTGRES_DB: ${POSTGRES_DB:-clinica}
+      # cria DB adicional pra Evolution
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-clinica-schema.sql:ro
+      - ./database/evolution-db.sql:/docker-entrypoint-initdb.d/02-evolution-schema.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - clinica-net
+
+  # ----------------------------------------------------------
+  # Redis · cache de estado (opcional mas recomendado)
+  # ----------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: clinica-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - clinica-net
+
+  # ----------------------------------------------------------
+  # n8n · orquestrador dos fluxos
+  # ----------------------------------------------------------
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: clinica-n8n
+    restart: unless-stopped
+    environment:
+      # Banco do n8n (pode ser o mesmo Postgres)
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${N8N_DB:-n8n}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-postgres}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:-clinica123}
+
+      # Host & URL pública
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-https}
+      WEBHOOK_URL: ${WEBHOOK_URL:-https://atendimento.clinicavida.com.br/}
+      N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL:-https://atendimento.clinicavida.com.br/}
+
+      # Execução
+      EXECUTIONS_MODE: ${EXECUTIONS_MODE:-regular}
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: 168   # 7 dias
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: all
+
+      # Locale
+      GENERIC_TIMEZONE: America/Sao_Paulo
+      N8N_DEFAULT_LOCALE: pt-BR
+
+      # Segurança
+      N8N_BASIC_AUTH_ACTIVE: "false"
+      N8N_USER_MANAGEMENT_DISABLED: "false"
+
+      # Variáveis customizadas (acessíveis via {{ $env.X }})
+      EVO_HOST: ${EVO_HOST:-evolution}
+      EVO_INSTANCE: ${EVO_INSTANCE:-clinica}
+      EVO_APIKEY: ${EVO_APIKEY}
+      META_PHONE_ID: ${META_PHONE_ID}
+      META_TOKEN: ${META_TOKEN}
+      META_VERIFY_TOKEN: ${META_VERIFY_TOKEN}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
+    volumes:
+      - n8ndata:/home/node/.n8n
+      - ./workflows:/home/node/.n8n/workflows:ro
+    ports:
+      - "127.0.0.1:5678:5678"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - clinica-net
+
+  # ----------------------------------------------------------
+  # Evolution API · gateway WhatsApp (alternativa não-oficial)
+  # Descomente se for usar Evolution ao invés da Meta API
+  # ----------------------------------------------------------
+  evolution:
+    image: atendai/evolution-api:latest
+    container_name: clinica-evolution
+    restart: unless-stopped
+    profiles: ["evolution"]   # inicia só se: docker compose --profile evolution up
+    environment:
+      AUTHENTICATION_API_KEY: ${EVO_APIKEY}
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
+
+      # Banco da Evolution (mesmo Postgres, DB separada)
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-clinica123}@postgres:5432/evolution
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "true"
+
+      # Webhook aponta pro n8n
+      WEBHOOK_GLOBAL_URL: ${WEBHOOK_URL:-https://atendimento.clinicavida.com.br/}webhook/clinica-webhook
+      WEBHOOK_GLOBAL_ENABLED: "true"
+      WEBHOOK_EVENTS_MESSAGE_UPSERT: "true"
+      WEBHOOK_EVENTS_CONNECTION_UPDATE: "true"
+
+      # Redis pra fila
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379
+
+      LOG_LEVEL: info
+    volumes:
+      - evodata:/evolution/instances
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - clinica-net
+
+  # ----------------------------------------------------------
+  # Caddy · reverse proxy com HTTPS automático (Let's Encrypt)
+  # ----------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: clinica-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    networks:
+      - clinica-net
+    depends_on:
+      - n8n
+
+  # ----------------------------------------------------------
+  # Portainer · painel web pra gerenciar Docker (opcional)
+  # ----------------------------------------------------------
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: clinica-portainer
+    restart: unless-stopped
+    profiles: ["management"]
+    ports:
+      - "127.0.0.1:9443:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainerdata:/data
+    networks:
+      - clinica-net
+
+  # ----------------------------------------------------------
+  # Adminer · UI web pro Postgres (opcional, dev only)
+  # ----------------------------------------------------------
+  adminer:
+    image: adminer:latest
+    container_name: clinica-adminer
+    restart: unless-stopped
+    profiles: ["management"]
+    ports:
+      - "127.0.0.1:8081:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: pepa-linha-dark
+    networks:
+      - clinica-net
+
+# ============================================================
+# Volumes
+# ============================================================
+volumes:
+  pgdata:
+  redisdata:
+  n8ndata:
+  evodata:
+  caddydata:
+  caddyconfig:
+  portainerdata:
+
+# ============================================================
+# Rede interna (DNS automático entre containers)
+# ============================================================
+networks:
+  clinica-net:
+    driver: bridge
+    name: clinica-net

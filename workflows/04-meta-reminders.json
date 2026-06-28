@@ -1,0 +1,192 @@
+{
+  "name": "04-META - Clínica WhatsApp · Lembretes com Templates",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{}]
+        }
+      },
+      "id": "cron_meta",
+      "name": "A cada 30 minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT a.id, a.phone, a.patient_name, a.specialty, a.start_time, a.reminder_24h_sent, a.reminder_2h_sent FROM appointments a WHERE a.status = 'confirmed' AND a.start_time BETWEEN NOW() + INTERVAL '23 hours' AND NOW() + INTERVAL '25 hours' AND a.reminder_24h_sent = false;",
+        "options": {}
+      },
+      "id": "db_24h",
+      "name": "Busca appts 24h",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [460, 200],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT a.id, a.phone, a.patient_name, a.specialty, a.start_time, a.reminder_2h_sent FROM appointments a WHERE a.status = 'confirmed' AND a.start_time BETWEEN NOW() + INTERVAL '90 minutes' AND NOW() + INTERVAL '150 minutes' AND a.reminder_2h_sent = false;",
+        "options": {}
+      },
+      "id": "db_2h",
+      "name": "Busca appts 2h",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [460, 400],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "typeValidation": "strict"},
+          "conditions": [
+            {"id": "h1", "leftValue": "={{ $json.id }}", "rightValue": "", "operator": {"type": "string", "operation": "exists", "singleValue": true}}
+          ]
+        }
+      },
+      "id": "if_has_24",
+      "name": "Tem 24h?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "typeValidation": "strict"},
+          "conditions": [
+            {"id": "h2", "leftValue": "={{ $json.id }}", "rightValue": "", "operator": {"type": "string", "operation": "exists", "singleValue": true}}
+          ]
+        }
+      },
+      "id": "if_has_2",
+      "name": "Tem 2h?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "functionCode": "const appts = $input.all().map(i => i.json);\n\nconst items = appts.map(a => {\n  const d = new Date(a.start_time);\n  const fmtDate = d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' });\n  const fmtTime = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });\n\n  return {\n    json: {\n      appointmentId: a.id,\n      phone: a.phone,\n      firstName: a.patient_name.split(' ')[0],\n      specialty: a.specialty,\n      date: fmtDate,\n      time: fmtTime,\n      template: 'lembrete_24h'\n    }\n  };\n});\n\nreturn items;\n"
+      },
+      "id": "fn_fmt_24",
+      "name": "Formata lembrete 24h",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "const appts = $input.all().map(i => i.json);\n\nconst items = appts.map(a => {\n  const d = new Date(a.start_time);\n  const fmtTime = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });\n\n  return {\n    json: {\n      appointmentId: a.id,\n      phone: a.phone,\n      firstName: a.patient_name.split(' ')[0],\n      specialty: a.specialty,\n      time: fmtTime,\n      template: 'lembrete_2h'\n    }\n  };\n});\n\nreturn items;\n"
+      },
+      "id": "fn_fmt_2",
+      "name": "Formata lembrete 2h",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $env.META_PHONE_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer {{ $env.META_TOKEN }}"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"recipient_type\": \"individual\",\n  \"to\": \"{{ $json.phone }}\",\n  \"type\": \"template\",\n  \"template\": {\n    \"name\": \"{{ $json.template }}\",\n    \"language\": {\"code\": \"pt_BR\"},\n    \"components\": [\n      {\n        \"type\": \"body\",\n        \"parameters\": [\n          {\"type\": \"text\", \"text\": {{ JSON.stringify($json.firstName) }}},\n          {\"type\": \"text\", \"text\": {{ JSON.stringify($json.specialty) }}},\n          {\"type\": \"text\", \"text\": {{ JSON.stringify($json.date || $json.time) }}}\n        ]\n      }\n    ]\n  }\n}",
+        "options": {"timeout": 15000}
+      },
+      "id": "send_template_24",
+      "name": "Envia template 24h",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 200],
+      "retryOnFail": true,
+      "maxTries": 3
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $env.META_PHONE_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer {{ $env.META_TOKEN }}"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"recipient_type\": \"individual\",\n  \"to\": \"{{ $json.phone }}\",\n  \"type\": \"template\",\n  \"template\": {\n    \"name\": \"{{ $json.template }}\",\n    \"language\": {\"code\": \"pt_BR\"},\n    \"components\": [\n      {\n        \"type\": \"body\",\n        \"parameters\": [\n          {\"type\": \"text\", \"text\": {{ JSON.stringify($json.firstName) }}},\n          {\"type\": \"text\", \"text\": {{ JSON.stringify($json.time) }}}\n        ]\n      }\n    ]\n  }\n}",
+        "options": {"timeout": 15000}
+      },
+      "id": "send_template_2",
+      "name": "Envia template 2h",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 400],
+      "retryOnFail": true,
+      "maxTries": 3
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE appointments SET reminder_24h_sent = true, reminder_24h_sent_at = NOW(), updated_at = NOW() WHERE id = {{ $json.appointmentId }};",
+        "options": {}
+      },
+      "id": "db_mark_24",
+      "name": "Marca 24h enviado",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1340, 200],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE appointments SET reminder_2h_sent = true, reminder_2h_sent_at = NOW(), updated_at = NOW() WHERE id = {{ $json.appointmentId }};",
+        "options": {}
+      },
+      "id": "db_mark_2",
+      "name": "Marca 2h enviado",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1340, 400],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    }
+  ],
+  "connections": {
+    "A cada 30 minutos": {
+      "main": [
+        [{"node": "Busca appts 24h", "type": "main", "index": 0}],
+        [{"node": "Busca appts 2h", "type": "main", "index": 0}]
+      ]
+    },
+    "Busca appts 24h": {"main": [[{"node": "Tem 24h?", "type": "main", "index": 0}]]},
+    "Busca appts 2h": {"main": [[{"node": "Tem 2h?", "type": "main", "index": 0}]]},
+    "Tem 24h?": {"main": [[{"node": "Formata lembrete 24h", "type": "main", "index": 0}]]},
+    "Tem 2h?": {"main": [[{"node": "Formata lembrete 2h", "type": "main", "index": 0}]]},
+    "Formata lembrete 24h": {"main": [[{"node": "Envia template 24h", "type": "main", "index": 0}]]},
+    "Formata lembrete 2h": {"main": [[{"node": "Envia template 2h", "type": "main", "index": 0}]]},
+    "Envia template 24h": {"main": [[{"node": "Marca 24h enviado", "type": "main", "index": 0}]]},
+    "Envia template 2h": {"main": [[{"node": "Marca 2h enviado", "type": "main", "index": 0}]]}
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/Sao_Paulo"
+  },
+  "tags": [{"name": "clinica"}, {"name": "meta-api"}, {"name": "lembretes"}],
+  "versionId": "1.0.0",
+  "id": "wf-meta-reminders"
+}

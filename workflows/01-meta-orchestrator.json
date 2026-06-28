@@ -1,0 +1,290 @@
+{
+  "name": "01-META - Clínica WhatsApp · Orquestrador (Meta Cloud API)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "clinica-meta-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh_meta_get",
+      "name": "Webhook Meta · Verification (GET)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 200],
+      "webhookId": "clinica-meta-webhook"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clinica-meta-webhook",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "wh_meta_post",
+      "name": "Webhook Meta · Mensagens (POST)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 400],
+      "webhookId": "clinica-meta-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "typeValidation": "strict"},
+          "conditions": [
+            {"id": "v1", "leftValue": "={{ $json.query['hub.mode'] }}", "rightValue": "subscribe", "operator": {"type": "string", "operation": "equals"}},
+            {"id": "v2", "leftValue": "={{ $json.query['hub.verify_token'] }}", "rightValue": "={{ $env.META_VERIFY_TOKEN }}", "operator": {"type": "string", "operation": "equals"}}
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if_verify",
+      "name": "Verifica token Meta",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.query['hub.challenge'] }}",
+        "options": {"responseCode": 200}
+      },
+      "id": "resp_ok",
+      "name": "Responde challenge (200)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [680, 100]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "Forbidden",
+        "options": {"responseCode": 403}
+      },
+      "id": "resp_forbidden",
+      "name": "Responde 403",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Normaliza payload do Meta WhatsApp Cloud API\n// Formato: entry[].changes[].value.messages[]\nconst body = $input.first().json.body;\nconst items = [];\n\nif (!body || !body.entry) {\n  return [{ json: { skip: true, reason: 'no_entry' } }];\n}\n\nfor (const entry of body.entry) {\n  for (const change of entry.changes || []) {\n    const value = change.value || {};\n    const phoneNumberId = value.metadata?.phone_number_id;\n    const contacts = value.contacts || [];\n    const messages = value.messages || [];\n    const statuses = value.statuses || [];\n\n    // Processa mensagens recebidas\n    for (const msg of messages) {\n      const contact = contacts.find(c => c.wa_id === msg.from) || {};\n\n      // Extrai texto de diferentes tipos\n      let text = '';\n      switch (msg.type) {\n        case 'text':\n          text = msg.text?.body || '';\n          break;\n        case 'button':\n          text = msg.button?.text || '';\n          break;\n        case 'interactive':\n          if (msg.interactive?.type === 'button_reply') text = msg.interactive.button_reply.title;\n          else if (msg.interactive?.type === 'list_reply') text = msg.interactive.list_reply.title;\n          break;\n        default:\n          text = `[${msg.type}]`;\n      }\n\n      items.push({\n        json: {\n          source: 'meta',\n          phoneNumberId,\n          phone: msg.from,\n          messageId: msg.id,\n          timestamp: msg.timestamp,\n          pushName: contact.profile?.name || '',\n          messageType: msg.type,\n          text,\n          raw: msg\n        }\n      });\n    }\n\n    // Ignora status updates (delivered, read, etc)\n    for (const status of statuses) {\n      // Opcionalmente loga ou processa\n      items.push({\n        json: {\n          source: 'meta',\n          skip: true,\n          phone: status.recipient_id,\n          messageId: status.id,\n          statusType: status.status,\n          reason: 'status_update'\n        }\n      });\n    }\n  }\n}\n\nreturn items.length ? items : [{ json: { skip: true, reason: 'no_messages' } }];\n"
+      },
+      "id": "fn_normalize_meta",
+      "name": "Normaliza payload Meta",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "typeValidation": "strict"},
+          "conditions": [
+            {"id": "s1", "leftValue": "={{ $json.skip }}", "rightValue": true, "operator": {"type": "boolean", "operation": "equals", "singleValue": true}}
+          ]
+        }
+      },
+      "id": "if_skip",
+      "name": "É pra pular?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK",
+        "options": {"responseCode": 200}
+      },
+      "id": "resp_skip",
+      "name": "Responde 200 (skip)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{}]
+        }
+      },
+      "id": "set_meta",
+      "name": "Prepara variáveis",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [900, 500],
+      "assignments": {
+        "assignments": [
+          {
+            "id": "m1",
+            "name": "phone",
+            "value": "={{ $json.phone }}",
+            "type": "string"
+          },
+          {
+            "id": "m2",
+            "name": "text",
+            "value": "={{ $json.text }}",
+            "type": "string"
+          },
+          {
+            "id": "m3",
+            "name": "pushName",
+            "value": "={{ $json.pushName }}",
+            "type": "string"
+          },
+          {
+            "id": "m4",
+            "name": "messageId",
+            "value": "={{ $json.messageId }}",
+            "type": "string"
+          },
+          {
+            "id": "m5",
+            "name": "phoneNumberId",
+            "value": "={{ $json.phoneNumberId }}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const text = ($input.first().json.text || '').toLowerCase().trim();\n\nlet intent = 'DESCONHECIDA';\nlet confidence = 0.0;\n\nconst patterns = {\n  SAUDACAO: [/^(oi|ol[aá]|bom dia|boa tarde|boa noite|hey|eae|salve)/i],\n  AGENDAR: [/agendar|marcar|consulta|horário|agenda|quero.*consulta|preciso.*consulta/i],\n  CANCELAR: [/cancelar|desmarcar|n[aã]o vou|n[aã]o posso|anular/i],\n  REAGENDAR: [/remarcar|mudar|trocar|reagendar|outro dia|outro hor[aá]rio/i],\n  CONSULTAR: [/minha consulta|próxima|quando é|quando vou|meus agendamentos/i],\n  INFO: [/endere[çc]o|conv[eê]nio|pre[çc]o|valor|como funciona|funcionamento|hor[aá]rio de atendimento/i],\n  HUMANO: [/atendente|humano|pessoa|algu[eé]m|recep[çc][aã]o|ligar/i]\n};\n\nfor (const [key, regs] of Object.entries(patterns)) {\n  for (const r of regs) {\n    if (r.test(text)) { intent = key; confidence = 0.8; break; }\n  }\n  if (intent !== 'DESCONHECIDA') break;\n}\n\nif (/^[1-6]$/.test(text)) {\n  intent = { '1': 'AGENDAR', '2': 'CONSULTAR', '3': 'CANCELAR', '4': 'REAGENDAR', '5': 'INFO', '6': 'HUMANO' }[text];\n  confidence = 0.95;\n}\n\nreturn { json: { ...$input.first().json, intent, confidence, normalizedText: text } };\n"
+      },
+      "id": "fn_intent",
+      "name": "Detecta intenção",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1120, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO patients (phone, name, created_at, updated_at) VALUES ({{ JSON.stringify($json.phone) }}, {{ JSON.stringify($json.pushName) }}, NOW(), NOW()) ON CONFLICT (phone) DO UPDATE SET name = COALESCE(EXCLUDED.name, patients.name), updated_at = NOW() RETURNING *;",
+        "options": {}
+      },
+      "id": "db_upsert",
+      "name": "Upsert paciente",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1340, 500],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM conversation_state WHERE phone = {{ JSON.stringify($json.phone) }};",
+        "options": {}
+      },
+      "id": "db_state",
+      "name": "Busca estado da conversa",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1560, 500],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = $input.first().json;\nconst intent = data.intent;\n\nlet reply = '';\n\nswitch (intent) {\n  case 'SAUDACAO':\n  case 'DESCONHECIDA':\n    reply = `Olá, ${data.pushName || 'tudo bem'}? 👋\\n\\nSou a assistente virtual da *Clínica Vida*. Como posso te ajudar hoje?\\n\\n*1️⃣* Agendar consulta\\n*2️⃣* Ver meus agendamentos\\n*3️⃣* Cancelar consulta\\n*4️⃣* Remarcar consulta\\n*5️⃣* Informações (endereço, convênios)\\n*6️⃣* Falar com atendente\\n\\n_Digite o número da opção_`;\n    break;\n  case 'INFO':\n    reply = `📍 *Clínica Vida*\\n\\n*Endereço:* Rua das Flores, 123 — Centro\\n*Horário:* Seg-Sex 7h-19h · Sáb 7h-12h\\n*Convênios:* Unimed, Amil, SulAmérica, Bradesco Saúde\\n*Particular:* a partir de R$ 250\\n\\nQuer *agendar* agora? É só digitar *1*.`;\n    break;\n  case 'HUMANO':\n    reply = `Vou te transferir para um atendente humano 👩‍💼\\n\\nPor favor, descreva brevemente o assunto. Em horário comercial o retorno é em até *5 minutos*.`;\n    break;\n  case 'AGENDAR':\n    reply = `Ótimo! Vamos agendar 😊\\n\\nQual especialidade você precisa?\\n\\n*1️⃣* Clínico Geral\\n*2️⃣* Cardiologia\\n*3️⃣* Dermatologia\\n*4️⃣* Ginecologia\\n*5️⃣* Pediatria\\n*6️⃣* Ortopedia\\n\\nResponde com o número da especialidade.`;\n    break;\n  default:\n    reply = `Desculpa, não entendi 🤔\\n\\nDigite *menu* para ver as opções ou escolha um número de 1 a 6.`;\n}\n\nreturn { json: { ...data, reply } };\n"
+      },
+      "id": "fn_reply",
+      "name": "Gera resposta",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1780, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $json.phoneNumberId }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer {{ $env.META_TOKEN }}"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"messaging_product\": \"whatsapp\",\n  \"recipient_type\": \"individual\",\n  \"to\": \"{{ $json.phone }}\",\n  \"type\": \"text\",\n  \"text\": {\n    \"preview_url\": false,\n    \"body\": {{ JSON.stringify($json.reply) }}\n  }\n}",
+        "options": {"timeout": 15000}
+      },
+      "id": "send_meta",
+      "name": "Envia via Meta API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 500],
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO conversation_log (phone, intent, confidence, message_text, response_text, message_id, direction, created_at) VALUES ({{ JSON.stringify($json.phone) }}, {{ JSON.stringify($json.intent) }}, {{ $json.confidence }}, {{ JSON.stringify($json.text) }}, {{ JSON.stringify($json.reply) }}, {{ JSON.stringify($json.messageId) }}, 'inbound', NOW()), ({{ JSON.stringify($json.phone) }}, {{ JSON.stringify($json.intent) }}, {{ $json.confidence }}, NULL, {{ JSON.stringify($json.reply) }}, NULL, 'outbound', NOW());",
+        "options": {}
+      },
+      "id": "db_log",
+      "name": "Log conversa",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2220, 500],
+      "credentials": {"postgres": {"id": "clinica-pg", "name": "Clínica PG"}}
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK",
+        "options": {"responseCode": 200}
+      },
+      "id": "resp_done",
+      "name": "Responde 200 (processado)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2440, 500]
+    }
+  ],
+  "connections": {
+    "Webhook Meta · Verification (GET)": {"main": [[{"node": "Verifica token Meta", "type": "main", "index": 0}]]},
+    "Verifica token Meta": {
+      "main": [
+        [{"node": "Responde challenge (200)", "type": "main", "index": 0}],
+        [{"node": "Responde 403", "type": "main", "index": 0}]
+      ]
+    },
+    "Webhook Meta · Mensagens (POST)": {"main": [[{"node": "Normaliza payload Meta", "type": "main", "index": 0}]]},
+    "Normaliza payload Meta": {"main": [[{"node": "É pra pular?", "type": "main", "index": 0}]]},
+    "É pra pular?": {
+      "main": [
+        [{"node": "Prepara variáveis", "type": "main", "index": 0}],
+        [{"node": "Responde 200 (skip)", "type": "main", "index": 0}]
+      ]
+    },
+    "Prepara variáveis": {"main": [[{"node": "Detecta intenção", "type": "main", "index": 0}]]},
+    "Detecta intenção": {"main": [[{"node": "Upsert paciente", "type": "main", "index": 0}]]},
+    "Upsert paciente": {"main": [[{"node": "Busca estado da conversa", "type": "main", "index": 0}]]},
+    "Busca estado da conversa": {"main": [[{"node": "Gera resposta", "type": "main", "index": 0}]]},
+    "Gera resposta": {"main": [[{"node": "Envia via Meta API", "type": "main", "index": 0}]]},
+    "Envia via Meta API": {"main": [[{"node": "Log conversa", "type": "main", "index": 0}]]},
+    "Log conversa": {"main": [[{"node": "Responde 200 (processado)", "type": "main", "index": 0}]]}
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "timezone": "America/Sao_Paulo"
+  },
+  "tags": [
+    {"name": "clinica"},
+    {"name": "meta-api"},
+    {"name": "oficial"}
+  ],
+  "versionId": "1.0.0",
+  "id": "wf-meta-orchestrator"
+}
