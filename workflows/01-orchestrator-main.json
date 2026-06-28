@@ -113,7 +113,7 @@
     },
     {
       "parameters": {
-        "functionCode": "// Detecta intenção a partir do texto simples (sem IA)\nconst text = ($input.first().json.text || '').toLowerCase().trim();\n\nlet intent = 'DESCONHECIDA';\nlet confidence = 0.0;\n\nconst patterns = {\n  SAUDACAO: [/^(oi|ol[aá]|bom dia|boa tarde|boa noite|hey|eae|salve)/i],\n  AGENDAR: [/agendar|marcar|consulta|horário|agenda|quero.*consulta|preciso.*consulta/i],\n  CANCELAR: [/cancelar|desmarcar|n[aã]o vou|n[aã]o posso|anular/i],\n  REAGENDAR: [/remarcar|mudar|trocar|reagendar|outro dia|outro hor[aá]rio/i],\n  CONSULTAR: [/minha consulta|próxima|quando é|quando vou|meus agendamentos/i],\n  INFO: [/endere[çc]o|conv[eê]nio|pre[çc]o|valor|como funciona|funcionamento|hor[aá]rio de atendimento/i],\n  HUMANO: [/atendente|humano|pessoa|algu[eé]m|recep[çc][aã]o|ligar/i],\n  CONFIRMAR: [/^(sim|s|yes|confirmo|confirmar|ok|pode ser|isso|exato)$/i],\n  NEGAR: [/^(n[aã]o|nao|n|no|cancelar|nunca|para)$/i]\n};\n\nfor (const [key, regs] of Object.entries(patterns)) {\n  for (const r of regs) {\n    if (r.test(text)) { intent = key; confidence = 0.8; break; }\n  }\n  if (intent !== 'DESCONHECIDA') break;\n}\n\n// menu numérico\nif (/^[1-6]$/.test(text)) {\n  intent = { '1': 'AGENDAR', '2': 'CONSULTAR', '3': 'CANCELAR', '4': 'REAGENDAR', '5': 'INFO', '6': 'HUMANO' }[text];\n  confidence = 0.95;\n}\n\nreturn { json: { ...$input.first().json, intent, confidence, normalizedText: text } };\n"
+        "functionCode": "// Detecta intenção a partir do texto simples (sem IA)\nconst text = ($input.first().json.text || '').toLowerCase().trim();\n\nlet intent = 'DESCONHECIDA';\nlet confidence = 0.0;\n\n// IMPORTANTE: ordem importa — padrões mais específicos primeiro\nconst patterns = [\n  ['SAUDACAO',  [/^(oi|ol[aá]|bom dia|boa tarde|boa noite|hey|eae|salve)/i]],\n  ['REAGENDAR', [/remarcar|mudar|trocar|reagendar|outro dia|outro hor[aá]rio/i]],\n  ['CANCELAR',  [/cancelar|desmarcar|n[aã]o vou|n[aã]o posso|anular/i]],\n  ['CONSULTAR', [/minha consulta|pr[oó]xima|quando [eé]|quando vou|meus agendamentos|ver agendamentos/i]],\n  ['AGENDAR',   [/agendar|marcar|quero.*consulta|preciso.*consulta|fazer.*consulta|nova consulta|quero marcar|preciso marcar/i]],\n  ['INFO',      [/endere[çc]o|conv[eê]nio|pre[çc]o|valor|como funciona|funcionamento|hor[aá]rio de atendimento/i]],\n  ['HUMANO',    [/atendente|humano|pessoa|algu[eé]m|recep[çc][aã]o|ligar/i]],\n  ['CONFIRMAR', [/^(sim|s|yes|confirmo|confirmar|ok|pode ser|isso|exato)$/i]],\n  ['NEGAR',     [/^(n[aã]o|nao|n|no|nunca|para)$/i]]\n];\n\nfor (const [key, regs] of patterns) {\n  for (const r of regs) {\n    if (r.test(text)) { intent = key; confidence = 0.8; break; }\n  }\n  if (intent !== 'DESCONHECIDA') break;\n}\n\n// menu numérico\nif (/^[1-6]$/.test(text)) {\n  intent = { '1': 'AGENDAR', '2': 'CONSULTAR', '3': 'CANCELAR', '4': 'REAGENDAR', '5': 'INFO', '6': 'HUMANO' }[text];\n  confidence = 0.95;\n}\n\nreturn { json: { ...$input.first().json, intent, confidence, normalizedText: text } };\n"
       },
       "id": "fn1",
       "name": "Detecta Intenção",
@@ -178,7 +178,7 @@
           "conditions": [
             {
               "id": "r1",
-              "leftValue": "={{ $json.intent }}",
+              "leftValue": "={{ $('Detecta Intenção').first().json.intent }}",
               "rightValue": "AGENDAR",
               "operator": {
                 "type": "string",
@@ -211,7 +211,7 @@
           "conditions": [
             {
               "id": "r2",
-              "leftValue": "={{ $json.intent }}",
+              "leftValue": "={{ $('Detecta Intenção').first().json.intent }}",
               "rightValue": "CANCELAR",
               "operator": {
                 "type": "string",
@@ -244,7 +244,7 @@
           "conditions": [
             {
               "id": "r3",
-              "leftValue": "={{ $json.intent }}",
+              "leftValue": "={{ $('Detecta Intenção').first().json.intent }}",
               "rightValue": "REAGENDAR",
               "operator": {
                 "type": "string",
@@ -277,7 +277,7 @@
           "conditions": [
             {
               "id": "r4",
-              "leftValue": "={{ $json.intent }}",
+              "leftValue": "={{ $('Detecta Intenção').first().json.intent }}",
               "rightValue": "CONSULTAR",
               "operator": {
                 "type": "string",
@@ -379,6 +379,71 @@
       "position": [
         2272,
         208
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE(\n  json_agg(\n    json_build_object(\n      'id', id, 'specialty', specialty, 'doctor', doctor,\n      'data', TO_CHAR(start_time AT TIME ZONE 'America/Sao_Paulo','DD/MM/YYYY'),\n      'hora', TO_CHAR(start_time AT TIME ZONE 'America/Sao_Paulo','HH24:MI')\n    ) ORDER BY start_time\n  ),\n  '[]'::json\n) AS appointments\nFROM appointments\nWHERE phone = '{{($('Normalizar Payload').first().json.phone || '').replace(/'/g, \"''\")}}' \n  AND status IN ('confirmed','pending')\n  AND start_time > NOW();",
+        "options": {}
+      },
+      "id": "busca-appts-cancel",
+      "name": "Busca Agendamentos (CANCELAR)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2048,
+        168
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "lJdJ75mDmCFc2NEt",
+          "name": "Clinica PG"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const row = $input.first().json;\nconst orig = $('Normalizar Payload').first().json;\nconst appts = row.appointments || [];\n\nlet reply;\nif (!appts.length) {\n  reply = 'Você não tem consultas agendadas no momento. 😊\\n\\nDigite *menu* para voltar ao início.';\n} else {\n  let lista = appts.map((a, i) => `*${i+1}.* ${a.specialty} com ${a.doctor}\\n   📅 ${a.data} às ${a.hora}`).join('\\n\\n');\n  reply = `Suas consultas agendadas:\\n\\n${lista}\\n\\nDigite o *número* da consulta que deseja cancelar ou *0* para voltar.`;\n}\n\nreturn { json: { ...orig, reply, appts } };\n"
+      },
+      "id": "fmt-cancel",
+      "name": "Formata Lista CANCELAR",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        2288,
+        168
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://clinica-evo:8080/message/sendText/clinica",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "apikey",
+              "value": "sua-chave-secreta-aqui"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ ({\"number\": $json.phone, \"text\": $json.reply, \"delay\": 1000}) }}",
+        "options": {}
+      },
+      "id": "resp-cancel",
+      "name": "Responde CANCELAR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2528,
+        168
       ]
     }
   ],
@@ -482,7 +547,7 @@
       "main": [
         [
           {
-            "node": "Gera Resposta",
+            "node": "Busca Agendamentos (CANCELAR)",
             "type": "main",
             "index": 0
           }
@@ -553,6 +618,28 @@
           }
         ]
       ]
+    },
+    "Busca Agendamentos (CANCELAR)": {
+      "main": [
+        [
+          {
+            "node": "Formata Lista CANCELAR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formata Lista CANCELAR": {
+      "main": [
+        [
+          {
+            "node": "Responde CANCELAR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
@@ -565,8 +652,8 @@
     "binaryMode": "separate"
   },
   "nodeGroups": [],
-  "activeVersionId": "47d265fc-91d1-47c8-9160-c207dbd91bda",
-  "versionCounter": 15,
+  "activeVersionId": "a03c33bb-c189-4b09-b684-33b0a64e8652",
+  "versionCounter": 19,
   "triggerCount": 1,
   "sourceWorkflowId": null,
   "shared": [
@@ -592,9 +679,9 @@
   "tags": [],
   "parentFolder": null,
   "activeVersion": {
-    "updatedAt": "2026-06-28T12:31:03.488Z",
-    "createdAt": "2026-06-28T12:31:03.488Z",
-    "versionId": "47d265fc-91d1-47c8-9160-c207dbd91bda",
+    "updatedAt": "2026-06-28T12:51:11.830Z",
+    "createdAt": "2026-06-28T12:51:11.830Z",
+    "versionId": "a03c33bb-c189-4b09-b684-33b0a64e8652",
     "workflowId": "wf-clinica-orchestrator",
     "nodes": [
       {
@@ -706,7 +793,7 @@
       },
       {
         "parameters": {
-          "functionCode": "// Detecta intenção a partir do texto simples (sem IA)\nconst text = ($input.first().json.text || '').toLowerCase().trim();\n\nlet intent = 'DESCONHECIDA';\nlet confidence = 0.0;\n\nconst patterns = {\n  SAUDACAO: [/^(oi|ol[aá]|bom dia|boa tarde|boa noite|hey|eae|salve)/i],\n  AGENDAR: [/agendar|marcar|consulta|horário|agenda|quero.*consulta|preciso.*consulta/i],\n  CANCELAR: [/cancelar|desmarcar|n[aã]o vou|n[aã]o posso|anular/i],\n  REAGENDAR: [/remarcar|mudar|trocar|reagendar|outro dia|outro hor[aá]rio/i],\n  CONSULTAR: [/minha consulta|próxima|quando é|quando vou|meus agendamentos/i],\n  INFO: [/endere[çc]o|conv[eê]nio|pre[çc]o|valor|como funciona|funcionamento|hor[aá]rio de atendimento/i],\n  HUMANO: [/atendente|humano|pessoa|algu[eé]m|recep[çc][aã]o|ligar/i],\n  CONFIRMAR: [/^(sim|s|yes|confirmo|confirmar|ok|pode ser|isso|exato)$/i],\n  NEGAR: [/^(n[aã]o|nao|n|no|cancelar|nunca|para)$/i]\n};\n\nfor (const [key, regs] of Object.entries(patterns)) {\n  for (const r of regs) {\n    if (r.test(text)) { intent = key; confidence = 0.8; break; }\n  }\n  if (intent !== 'DESCONHECIDA') break;\n}\n\n// menu numérico\nif (/^[1-6]$/.test(text)) {\n  intent = { '1': 'AGENDAR', '2': 'CONSULTAR', '3': 'CANCELAR', '4': 'REAGENDAR', '5': 'INFO', '6': 'HUMANO' }[text];\n  confidence = 0.95;\n}\n\nreturn { json: { ...$input.first().json, intent, confidence, normalizedText: text } };\n"
+          "functionCode": "// Detecta intenção a partir do texto simples (sem IA)\nconst text = ($input.first().json.text || '').toLowerCase().trim();\n\nlet intent = 'DESCONHECIDA';\nlet confidence = 0.0;\n\n// IMPORTANTE: ordem importa — padrões mais específicos primeiro\nconst patterns = [\n  ['SAUDACAO',  [/^(oi|ol[aá]|bom dia|boa tarde|boa noite|hey|eae|salve)/i]],\n  ['REAGENDAR', [/remarcar|mudar|trocar|reagendar|outro dia|outro hor[aá]rio/i]],\n  ['CANCELAR',  [/cancelar|desmarcar|n[aã]o vou|n[aã]o posso|anular/i]],\n  ['CONSULTAR', [/minha consulta|pr[oó]xima|quando [eé]|quando vou|meus agendamentos|ver agendamentos/i]],\n  ['AGENDAR',   [/agendar|marcar|quero.*consulta|preciso.*consulta|fazer.*consulta|nova consulta|quero marcar|preciso marcar/i]],\n  ['INFO',      [/endere[çc]o|conv[eê]nio|pre[çc]o|valor|como funciona|funcionamento|hor[aá]rio de atendimento/i]],\n  ['HUMANO',    [/atendente|humano|pessoa|algu[eé]m|recep[çc][aã]o|ligar/i]],\n  ['CONFIRMAR', [/^(sim|s|yes|confirmo|confirmar|ok|pode ser|isso|exato)$/i]],\n  ['NEGAR',     [/^(n[aã]o|nao|n|no|nunca|para)$/i]]\n];\n\nfor (const [key, regs] of patterns) {\n  for (const r of regs) {\n    if (r.test(text)) { intent = key; confidence = 0.8; break; }\n  }\n  if (intent !== 'DESCONHECIDA') break;\n}\n\n// menu numérico\nif (/^[1-6]$/.test(text)) {\n  intent = { '1': 'AGENDAR', '2': 'CONSULTAR', '3': 'CANCELAR', '4': 'REAGENDAR', '5': 'INFO', '6': 'HUMANO' }[text];\n  confidence = 0.95;\n}\n\nreturn { json: { ...$input.first().json, intent, confidence, normalizedText: text } };\n"
         },
         "id": "fn1",
         "name": "Detecta Intenção",
@@ -771,7 +858,7 @@
             "conditions": [
               {
                 "id": "r1",
-                "leftValue": "={{ $json.intent }}",
+                "leftValue": "={{ $('Detecta Intenção').first().json.intent }}",
                 "rightValue": "AGENDAR",
                 "operator": {
                   "type": "string",
@@ -804,7 +891,7 @@
             "conditions": [
               {
                 "id": "r2",
-                "leftValue": "={{ $json.intent }}",
+                "leftValue": "={{ $('Detecta Intenção').first().json.intent }}",
                 "rightValue": "CANCELAR",
                 "operator": {
                   "type": "string",
@@ -837,7 +924,7 @@
             "conditions": [
               {
                 "id": "r3",
-                "leftValue": "={{ $json.intent }}",
+                "leftValue": "={{ $('Detecta Intenção').first().json.intent }}",
                 "rightValue": "REAGENDAR",
                 "operator": {
                   "type": "string",
@@ -870,7 +957,7 @@
             "conditions": [
               {
                 "id": "r4",
-                "leftValue": "={{ $json.intent }}",
+                "leftValue": "={{ $('Detecta Intenção').first().json.intent }}",
                 "rightValue": "CONSULTAR",
                 "operator": {
                   "type": "string",
@@ -972,6 +1059,71 @@
         "position": [
           2272,
           208
+        ]
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT COALESCE(\n  json_agg(\n    json_build_object(\n      'id', id, 'specialty', specialty, 'doctor', doctor,\n      'data', TO_CHAR(start_time AT TIME ZONE 'America/Sao_Paulo','DD/MM/YYYY'),\n      'hora', TO_CHAR(start_time AT TIME ZONE 'America/Sao_Paulo','HH24:MI')\n    ) ORDER BY start_time\n  ),\n  '[]'::json\n) AS appointments\nFROM appointments\nWHERE phone = '{{($('Normalizar Payload').first().json.phone || '').replace(/'/g, \"''\")}}' \n  AND status IN ('confirmed','pending')\n  AND start_time > NOW();",
+          "options": {}
+        },
+        "id": "busca-appts-cancel",
+        "name": "Busca Agendamentos (CANCELAR)",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          2048,
+          168
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "lJdJ75mDmCFc2NEt",
+            "name": "Clinica PG"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "functionCode": "const row = $input.first().json;\nconst orig = $('Normalizar Payload').first().json;\nconst appts = row.appointments || [];\n\nlet reply;\nif (!appts.length) {\n  reply = 'Você não tem consultas agendadas no momento. 😊\\n\\nDigite *menu* para voltar ao início.';\n} else {\n  let lista = appts.map((a, i) => `*${i+1}.* ${a.specialty} com ${a.doctor}\\n   📅 ${a.data} às ${a.hora}`).join('\\n\\n');\n  reply = `Suas consultas agendadas:\\n\\n${lista}\\n\\nDigite o *número* da consulta que deseja cancelar ou *0* para voltar.`;\n}\n\nreturn { json: { ...orig, reply, appts } };\n"
+        },
+        "id": "fmt-cancel",
+        "name": "Formata Lista CANCELAR",
+        "type": "n8n-nodes-base.function",
+        "typeVersion": 1,
+        "position": [
+          2288,
+          168
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://clinica-evo:8080/message/sendText/clinica",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "apikey",
+                "value": "sua-chave-secreta-aqui"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ ({\"number\": $json.phone, \"text\": $json.reply, \"delay\": 1000}) }}",
+          "options": {}
+        },
+        "id": "resp-cancel",
+        "name": "Responde CANCELAR",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2528,
+          168
         ]
       }
     ],
@@ -1075,7 +1227,7 @@
         "main": [
           [
             {
-              "node": "Gera Resposta",
+              "node": "Busca Agendamentos (CANCELAR)",
               "type": "main",
               "index": 0
             }
@@ -1146,6 +1298,28 @@
             }
           ]
         ]
+      },
+      "Busca Agendamentos (CANCELAR)": {
+        "main": [
+          [
+            {
+              "node": "Formata Lista CANCELAR",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Formata Lista CANCELAR": {
+        "main": [
+          [
+            {
+              "node": "Responde CANCELAR",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
       }
     },
     "nodeGroups": [],
@@ -1155,10 +1329,10 @@
     "autosaved": false,
     "workflowPublishHistory": [
       {
-        "createdAt": "2026-06-28T12:31:16.463Z",
-        "id": 39,
+        "createdAt": "2026-06-28T12:51:22.781Z",
+        "id": 47,
         "workflowId": "wf-clinica-orchestrator",
-        "versionId": "47d265fc-91d1-47c8-9160-c207dbd91bda",
+        "versionId": "a03c33bb-c189-4b09-b684-33b0a64e8652",
         "event": "activated",
         "userId": "8cf90173-71b2-42b4-aed0-c8af3bc9ca32"
       }
@@ -1183,5 +1357,5 @@
     "workflow:unshare",
     "workflow:update"
   ],
-  "checksum": "c0803d0be57783f6954ccd6e82bea160420aba060c96207e20cbd2729df8dae9"
+  "checksum": "b6c0640622f5fe161b0a9abf540fc9b627bdee7ed7ac634736e88ec6c55b6133"
 }
