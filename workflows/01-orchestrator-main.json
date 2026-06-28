@@ -445,6 +445,202 @@
         2528,
         168
       ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE(\n  json_agg(\n    json_build_object(\n      'id', id, 'specialty', specialty, 'doctor', doctor,\n      'data', TO_CHAR(start_time AT TIME ZONE 'America/Sao_Paulo','DD/MM/YYYY'),\n      'hora', TO_CHAR(start_time AT TIME ZONE 'America/Sao_Paulo','HH24:MI'),\n      'status', status\n    ) ORDER BY start_time\n  ),\n  '[]'::json\n) AS appointments\nFROM appointments\nWHERE phone = '{{($('Normalizar Payload').first().json.phone || '').replace(/'/g, \"''\")}}' \n  AND status IN ('confirmed','pending')\n  AND start_time > NOW();",
+        "options": {}
+      },
+      "id": "busca-appts-consultar",
+      "name": "Busca Agendamentos (CONSULTAR)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2048,
+        528
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "lJdJ75mDmCFc2NEt",
+          "name": "Clinica PG"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const row = $input.first().json;\nconst orig = $('Normalizar Payload').first().json;\nconst appts = row.appointments || [];\n\nlet reply;\nif (!appts.length) {\n  reply = 'Você não tem consultas agendadas no momento. 😊\\n\\nPara agendar, digite *1*.';\n} else {\n  const lista = appts.map((a, i) =>\n    `*${i+1}.* ${a.specialty}\\n   👨‍⚕️ ${a.doctor}\\n   📅 ${a.data} às ${a.hora}`\n  ).join('\\n\\n');\n  const plural = appts.length === 1 ? 'consulta agendada' : 'consultas agendadas';\n  reply = `Você tem *${appts.length} ${plural}*:\\n\\n${lista}\\n\\nDigite *menu* para voltar ao início.`;\n}\n\nreturn { json: { ...orig, reply, appts } };\n"
+      },
+      "id": "fmt-consultar",
+      "name": "Formata Lista CONSULTAR",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        2288,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://clinica-evo:8080/message/sendText/clinica",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "apikey",
+              "value": "sua-chave-secreta-aqui"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ ({\"number\": $json.phone, \"text\": $json.reply, \"delay\": 1000}) }}",
+        "options": {}
+      },
+      "id": "resp-consultar",
+      "name": "Responde CONSULTAR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2528,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const state = $input.first().json;          // conversation_state row\nconst orig  = $('Detecta Intenção').first().json; // intent original\nconst text  = (orig.text || '').trim();\n\nlet intent = orig.intent;\n\n// Quando aguardando especialidade e usuário digita 1-6 → especialidade\nif (state.state === 'AWAITING_SPECIALTY' && /^[1-6]$/.test(text)) {\n  intent = 'SELECIONA_ESPECIALIDADE';\n}\n// Quando aguardando confirmação e usuário confirma/nega\nif (state.state === 'AWAITING_CONFIRM') {\n  if (/^(sim|s|yes|confirmo|ok|1)$/i.test(text)) intent = 'CONFIRMAR';\n  if (/^(n[aã]o|nao|n|2|cancelar)$/i.test(text)) intent = 'NEGAR';\n}\n// \"menu\" sempre reseta\nif (/^menu$/i.test(text)) intent = 'SAUDACAO';\n\nreturn { json: { ...orig, intent, conv_state: state.state, conv_context: state.context } };\n"
+      },
+      "id": "interpreta-ctx",
+      "name": "Interpreta Contexto",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1788,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = $input.first().json;\nconst especialidades = {\n  '1': { name: 'Clínico Geral',  duration: 30 },\n  '2': { name: 'Cardiologia',    duration: 40 },\n  '3': { name: 'Dermatologia',   duration: 30 },\n  '4': { name: 'Ginecologia',    duration: 40 },\n  '5': { name: 'Pediatria',      duration: 30 },\n  '6': { name: 'Ortopedia',      duration: 40 },\n};\nconst esp = especialidades[data.text] || { name: 'Clínico Geral', duration: 30 };\nconst newContext = { ...(data.conv_context || {}), specialty: esp.name, duration: esp.duration };\nconst reply = `Ótima escolha! *${esp.name}* ✅\\n\\nQual data você prefere?\\nEx: *15/07* ou *amanhã*\\n\\n_(Atendemos Seg-Sex 7h-19h · Sáb 7h-12h)_`;\n\nreturn { json: { ...data, reply, newState: 'AWAITING_DATE', newContext } };\n"
+      },
+      "id": "handle-especialidade",
+      "name": "Handle Especialidade",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        2048,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE conversation_state\nSET state = 'AWAITING_DATE',\n    context = jsonb_build_object(\n      'specialty', '{{($json.newContext.specialty || \"Clínico Geral\").replace(/'/g, \"''\")}}',\n      'duration',  {{$json.newContext.duration || 30}}\n    ),\n    last_intent  = 'SELECIONA_ESPECIALIDADE',\n    last_seen_at = NOW(),\n    expires_at   = NOW() + INTERVAL '30 minutes'\nWHERE phone = '{{($json.phone || \"\").replace(/'/g, \"''\")}}';\nSELECT state, phone FROM conversation_state WHERE phone = '{{($json.phone || \"\").replace(/'/g, \"''\")}}';",
+        "options": {}
+      },
+      "id": "state-esp",
+      "name": "Salva Estado (ESPECIALIDADE)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2268,
+        -80
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "lJdJ75mDmCFc2NEt",
+          "name": "Clinica PG"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://clinica-evo:8080/message/sendText/clinica",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "apikey",
+              "value": "sua-chave-secreta-aqui"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ ({\"number\": $(\"Handle Especialidade\").first().json.phone, \"text\": $(\"Handle Especialidade\").first().json.reply, \"delay\": 1000}) }}",
+        "options": {}
+      },
+      "id": "resp-especialidade",
+      "name": "Responde Especialidade",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2488,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE conversation_state\nSET state = 'AWAITING_SPECIALTY',\n    last_intent  = 'AGENDAR',\n    last_seen_at = NOW(),\n    expires_at   = NOW() + INTERVAL '30 minutes'\nWHERE phone = '{{($(\"Interpreta Contexto\").first().json.phone || \"\").replace(/'/g, \"''\")}}';\nSELECT state FROM conversation_state WHERE phone = '{{($(\"Interpreta Contexto\").first().json.phone || \"\").replace(/'/g, \"''\")}}';",
+        "options": {}
+      },
+      "id": "state-agendar",
+      "name": "Salva Estado (AGENDAR)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2732,
+        224
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "lJdJ75mDmCFc2NEt",
+          "name": "Clinica PG"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "rsel",
+              "leftValue": "={{ $('Interpreta Contexto').first().json.intent }}",
+              "rightValue": "SELECIONA_ESPECIALIDADE",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "router-sel-esp",
+      "name": "Roteia: SELECIONAR_ESP",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1608,
+        80
+      ]
     }
   ],
   "connections": {
@@ -518,7 +714,7 @@
       "main": [
         [
           {
-            "node": "Roteia: AGENDAR",
+            "node": "Interpreta Contexto",
             "type": "main",
             "index": 0
           }
@@ -583,7 +779,7 @@
       "main": [
         [
           {
-            "node": "Gera Resposta",
+            "node": "Busca Agendamentos (CONSULTAR)",
             "type": "main",
             "index": 0
           }
@@ -612,7 +808,7 @@
       "main": [
         [
           {
-            "node": "Log da Conversa",
+            "node": "Salva Estado (AGENDAR)",
             "type": "main",
             "index": 0
           }
@@ -640,6 +836,90 @@
           }
         ]
       ]
+    },
+    "Busca Agendamentos (CONSULTAR)": {
+      "main": [
+        [
+          {
+            "node": "Formata Lista CONSULTAR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formata Lista CONSULTAR": {
+      "main": [
+        [
+          {
+            "node": "Responde CONSULTAR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpreta Contexto": {
+      "main": [
+        [
+          {
+            "node": "Roteia: SELECIONAR_ESP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Roteia: SELECIONAR_ESP": {
+      "main": [
+        [
+          {
+            "node": "Handle Especialidade",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Roteia: AGENDAR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Especialidade": {
+      "main": [
+        [
+          {
+            "node": "Salva Estado (ESPECIALIDADE)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salva Estado (ESPECIALIDADE)": {
+      "main": [
+        [
+          {
+            "node": "Responde Especialidade",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salva Estado (AGENDAR)": {
+      "main": [
+        [
+          {
+            "node": "Salva Estado (AGENDAR)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
@@ -652,8 +932,8 @@
     "binaryMode": "separate"
   },
   "nodeGroups": [],
-  "activeVersionId": "a03c33bb-c189-4b09-b684-33b0a64e8652",
-  "versionCounter": 19,
+  "activeVersionId": "16d4e782-1c67-441d-a086-74ddc4690e7f",
+  "versionCounter": 22,
   "triggerCount": 1,
   "sourceWorkflowId": null,
   "shared": [
@@ -679,9 +959,9 @@
   "tags": [],
   "parentFolder": null,
   "activeVersion": {
-    "updatedAt": "2026-06-28T12:51:11.830Z",
-    "createdAt": "2026-06-28T12:51:11.830Z",
-    "versionId": "a03c33bb-c189-4b09-b684-33b0a64e8652",
+    "updatedAt": "2026-06-28T13:23:30.110Z",
+    "createdAt": "2026-06-28T13:23:30.110Z",
+    "versionId": "16d4e782-1c67-441d-a086-74ddc4690e7f",
     "workflowId": "wf-clinica-orchestrator",
     "nodes": [
       {
@@ -1125,6 +1405,202 @@
           2528,
           168
         ]
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT COALESCE(\n  json_agg(\n    json_build_object(\n      'id', id, 'specialty', specialty, 'doctor', doctor,\n      'data', TO_CHAR(start_time AT TIME ZONE 'America/Sao_Paulo','DD/MM/YYYY'),\n      'hora', TO_CHAR(start_time AT TIME ZONE 'America/Sao_Paulo','HH24:MI'),\n      'status', status\n    ) ORDER BY start_time\n  ),\n  '[]'::json\n) AS appointments\nFROM appointments\nWHERE phone = '{{($('Normalizar Payload').first().json.phone || '').replace(/'/g, \"''\")}}' \n  AND status IN ('confirmed','pending')\n  AND start_time > NOW();",
+          "options": {}
+        },
+        "id": "busca-appts-consultar",
+        "name": "Busca Agendamentos (CONSULTAR)",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          2048,
+          528
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "lJdJ75mDmCFc2NEt",
+            "name": "Clinica PG"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "functionCode": "const row = $input.first().json;\nconst orig = $('Normalizar Payload').first().json;\nconst appts = row.appointments || [];\n\nlet reply;\nif (!appts.length) {\n  reply = 'Você não tem consultas agendadas no momento. 😊\\n\\nPara agendar, digite *1*.';\n} else {\n  const lista = appts.map((a, i) =>\n    `*${i+1}.* ${a.specialty}\\n   👨‍⚕️ ${a.doctor}\\n   📅 ${a.data} às ${a.hora}`\n  ).join('\\n\\n');\n  const plural = appts.length === 1 ? 'consulta agendada' : 'consultas agendadas';\n  reply = `Você tem *${appts.length} ${plural}*:\\n\\n${lista}\\n\\nDigite *menu* para voltar ao início.`;\n}\n\nreturn { json: { ...orig, reply, appts } };\n"
+        },
+        "id": "fmt-consultar",
+        "name": "Formata Lista CONSULTAR",
+        "type": "n8n-nodes-base.function",
+        "typeVersion": 1,
+        "position": [
+          2288,
+          528
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://clinica-evo:8080/message/sendText/clinica",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "apikey",
+                "value": "sua-chave-secreta-aqui"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ ({\"number\": $json.phone, \"text\": $json.reply, \"delay\": 1000}) }}",
+          "options": {}
+        },
+        "id": "resp-consultar",
+        "name": "Responde CONSULTAR",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2528,
+          528
+        ]
+      },
+      {
+        "parameters": {
+          "functionCode": "const state = $input.first().json;          // conversation_state row\nconst orig  = $('Detecta Intenção').first().json; // intent original\nconst text  = (orig.text || '').trim();\n\nlet intent = orig.intent;\n\n// Quando aguardando especialidade e usuário digita 1-6 → especialidade\nif (state.state === 'AWAITING_SPECIALTY' && /^[1-6]$/.test(text)) {\n  intent = 'SELECIONA_ESPECIALIDADE';\n}\n// Quando aguardando confirmação e usuário confirma/nega\nif (state.state === 'AWAITING_CONFIRM') {\n  if (/^(sim|s|yes|confirmo|ok|1)$/i.test(text)) intent = 'CONFIRMAR';\n  if (/^(n[aã]o|nao|n|2|cancelar)$/i.test(text)) intent = 'NEGAR';\n}\n// \"menu\" sempre reseta\nif (/^menu$/i.test(text)) intent = 'SAUDACAO';\n\nreturn { json: { ...orig, intent, conv_state: state.state, conv_context: state.context } };\n"
+        },
+        "id": "interpreta-ctx",
+        "name": "Interpreta Contexto",
+        "type": "n8n-nodes-base.function",
+        "typeVersion": 1,
+        "position": [
+          1788,
+          208
+        ]
+      },
+      {
+        "parameters": {
+          "functionCode": "const data = $input.first().json;\nconst especialidades = {\n  '1': { name: 'Clínico Geral',  duration: 30 },\n  '2': { name: 'Cardiologia',    duration: 40 },\n  '3': { name: 'Dermatologia',   duration: 30 },\n  '4': { name: 'Ginecologia',    duration: 40 },\n  '5': { name: 'Pediatria',      duration: 30 },\n  '6': { name: 'Ortopedia',      duration: 40 },\n};\nconst esp = especialidades[data.text] || { name: 'Clínico Geral', duration: 30 };\nconst newContext = { ...(data.conv_context || {}), specialty: esp.name, duration: esp.duration };\nconst reply = `Ótima escolha! *${esp.name}* ✅\\n\\nQual data você prefere?\\nEx: *15/07* ou *amanhã*\\n\\n_(Atendemos Seg-Sex 7h-19h · Sáb 7h-12h)_`;\n\nreturn { json: { ...data, reply, newState: 'AWAITING_DATE', newContext } };\n"
+        },
+        "id": "handle-especialidade",
+        "name": "Handle Especialidade",
+        "type": "n8n-nodes-base.function",
+        "typeVersion": 1,
+        "position": [
+          2048,
+          -80
+        ]
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "UPDATE conversation_state\nSET state = 'AWAITING_DATE',\n    context = jsonb_build_object(\n      'specialty', '{{($json.newContext.specialty || \"Clínico Geral\").replace(/'/g, \"''\")}}',\n      'duration',  {{$json.newContext.duration || 30}}\n    ),\n    last_intent  = 'SELECIONA_ESPECIALIDADE',\n    last_seen_at = NOW(),\n    expires_at   = NOW() + INTERVAL '30 minutes'\nWHERE phone = '{{($json.phone || \"\").replace(/'/g, \"''\")}}';\nSELECT state, phone FROM conversation_state WHERE phone = '{{($json.phone || \"\").replace(/'/g, \"''\")}}';",
+          "options": {}
+        },
+        "id": "state-esp",
+        "name": "Salva Estado (ESPECIALIDADE)",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          2268,
+          -80
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "lJdJ75mDmCFc2NEt",
+            "name": "Clinica PG"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://clinica-evo:8080/message/sendText/clinica",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "apikey",
+                "value": "sua-chave-secreta-aqui"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ ({\"number\": $(\"Handle Especialidade\").first().json.phone, \"text\": $(\"Handle Especialidade\").first().json.reply, \"delay\": 1000}) }}",
+          "options": {}
+        },
+        "id": "resp-especialidade",
+        "name": "Responde Especialidade",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2488,
+          -80
+        ]
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "UPDATE conversation_state\nSET state = 'AWAITING_SPECIALTY',\n    last_intent  = 'AGENDAR',\n    last_seen_at = NOW(),\n    expires_at   = NOW() + INTERVAL '30 minutes'\nWHERE phone = '{{($(\"Interpreta Contexto\").first().json.phone || \"\").replace(/'/g, \"''\")}}';\nSELECT state FROM conversation_state WHERE phone = '{{($(\"Interpreta Contexto\").first().json.phone || \"\").replace(/'/g, \"''\")}}';",
+          "options": {}
+        },
+        "id": "state-agendar",
+        "name": "Salva Estado (AGENDAR)",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          2732,
+          224
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "lJdJ75mDmCFc2NEt",
+            "name": "Clinica PG"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "id": "rsel",
+                "leftValue": "={{ $('Interpreta Contexto').first().json.intent }}",
+                "rightValue": "SELECIONA_ESPECIALIDADE",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          }
+        },
+        "id": "router-sel-esp",
+        "name": "Roteia: SELECIONAR_ESP",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1608,
+          80
+        ]
       }
     ],
     "connections": {
@@ -1198,7 +1674,7 @@
         "main": [
           [
             {
-              "node": "Roteia: AGENDAR",
+              "node": "Interpreta Contexto",
               "type": "main",
               "index": 0
             }
@@ -1263,7 +1739,7 @@
         "main": [
           [
             {
-              "node": "Gera Resposta",
+              "node": "Busca Agendamentos (CONSULTAR)",
               "type": "main",
               "index": 0
             }
@@ -1292,7 +1768,7 @@
         "main": [
           [
             {
-              "node": "Log da Conversa",
+              "node": "Salva Estado (AGENDAR)",
               "type": "main",
               "index": 0
             }
@@ -1320,6 +1796,90 @@
             }
           ]
         ]
+      },
+      "Busca Agendamentos (CONSULTAR)": {
+        "main": [
+          [
+            {
+              "node": "Formata Lista CONSULTAR",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Formata Lista CONSULTAR": {
+        "main": [
+          [
+            {
+              "node": "Responde CONSULTAR",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Interpreta Contexto": {
+        "main": [
+          [
+            {
+              "node": "Roteia: SELECIONAR_ESP",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Roteia: SELECIONAR_ESP": {
+        "main": [
+          [
+            {
+              "node": "Handle Especialidade",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Roteia: AGENDAR",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Handle Especialidade": {
+        "main": [
+          [
+            {
+              "node": "Salva Estado (ESPECIALIDADE)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Salva Estado (ESPECIALIDADE)": {
+        "main": [
+          [
+            {
+              "node": "Responde Especialidade",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Salva Estado (AGENDAR)": {
+        "main": [
+          [
+            {
+              "node": "Salva Estado (AGENDAR)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
       }
     },
     "nodeGroups": [],
@@ -1329,10 +1889,10 @@
     "autosaved": false,
     "workflowPublishHistory": [
       {
-        "createdAt": "2026-06-28T12:51:22.781Z",
-        "id": 47,
+        "createdAt": "2026-06-28T13:23:40.411Z",
+        "id": 53,
         "workflowId": "wf-clinica-orchestrator",
-        "versionId": "a03c33bb-c189-4b09-b684-33b0a64e8652",
+        "versionId": "16d4e782-1c67-441d-a086-74ddc4690e7f",
         "event": "activated",
         "userId": "8cf90173-71b2-42b4-aed0-c8af3bc9ca32"
       }
@@ -1357,5 +1917,5 @@
     "workflow:unshare",
     "workflow:update"
   ],
-  "checksum": "b6c0640622f5fe161b0a9abf540fc9b627bdee7ed7ac634736e88ec6c55b6133"
+  "checksum": "05ff0a5259d5ebe44546bf68c389446f054cbc3e9ad216473e6c83fec0b7982c"
 }
